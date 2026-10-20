@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tmux-bridge"
+version = "0.1.0a1"
+description = "A compact mobile terminal for your tmux sessions"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name = "Akshay Ram"}]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+]
+dynamic = ["dependencies"]
+
+[project.urls]
+Repository = "https://github.com/ar-ramchandra/tmux-bridge"
+Issues = "https://github.com/ar-ramchandra/tmux-bridge/issues"
+Documentation = "https://github.com/ar-ramchandra/tmux-bridge/tree/main/docs"
+
+[project.scripts]
+tmux-bridge = "bridge_cli:main"
+
+[tool.setuptools]
+py-modules = ["bridge_cli", "gateway", "server", "auth", "protocol", "cloudflare", "sysinfo", "browser_security", "mtls_proxy", "transport_pki", "node_setup", "node_install", "node_runtime"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
