@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Restore terminal keyboard focus when selecting or switching desktop sessions. Preserve keyboard tab navigation and mobile keyboard behavior.
+
 ## 0.1.0a1
 
 First public alpha, extracted from a working private deployment into a clean repository.

@@ -489,7 +489,7 @@ async def _auto_start_cloudflared():
 @app.get("/")
 async def index():
     return HTMLResponse(HTML, headers={
-        "X-Bridge-Version": "2026-10-20-direct-selection",
+        "X-Bridge-Version": "2026-10-22-terminal-focus",
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Pragma": "no-cache", "Expires": "0",
     })
@@ -4232,13 +4232,16 @@ function closeConnection() {
   hasInput=false;prevConnected=false;updateInputState();
 }
 function connect(session) {
-  if(currentSession===session && ws && ws.readyState===WebSocket.OPEN){closeSidebar();return;}
+  if(currentSession===session && ws && ws.readyState===WebSocket.OPEN){closeSidebar();if(!isTouchDevice)term.focus();return;}
   closeConnection();currentSession=session;isMuted=false;
   rememberTerminalTab();
   document.getElementById('mic-btn').classList.remove('barred');
   hideServerLanding();chanTitle.textContent=session||'—';
   term.reset();fitAddon.fit();
   openSessionSocket(currentServer,session,terminalTabScroll.get(terminalTabKey(currentServer,session))||0);
+  // Desktop navigation should leave normal typing in the terminal. Touch
+  // devices still open their keyboard only through an explicit terminal tap.
+  if(!isTouchDevice)term.focus();
 }
 function reconnect(session) {
   if(!currentServer || currentSession!==session)return;
@@ -4250,7 +4253,7 @@ function openSessionSocket(server,session,distance) {
   const old=ws;if(old){old.onclose=null;old.onmessage=null;old.close();}
   const proto=location.protocol==='https:'?'wss':'ws';
   const socket=new WebSocket(proto+'://'+location.host+'/ws/'+encodeURIComponent(server)+'/'+encodeURIComponent(session)+
-    '?cols='+term.cols+'&rows='+term.rows+'&device='+encodeURIComponent(deviceLabel)+'&client_id='+clientId+'&ui_version=2026-10-20-direct-selection');
+    '?cols='+term.cols+'&rows='+term.rows+'&device='+encodeURIComponent(deviceLabel)+'&client_id='+clientId+'&ui_version=2026-10-22-terminal-focus');
   ws=socket;socket.binaryType='arraybuffer';hasInput=false;updateInputState();
   const current=()=>ws===socket && currentServer===server && currentSession===session;
   let replayPending=true;
