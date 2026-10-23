@@ -372,12 +372,13 @@ class GatewayManager:
             except Exception:
                 pass
         self.server_connections[server_name] = conn
-        # Update proxy sessions to use the new connection
+        # A replacement can arrive before the old socket reports a disconnect.
+        # Its terminal channels no longer exist: make existing browsers reconnect
+        # rather than leaving them apparently connected with nowhere to send input.
         for key, ps in self.proxy_sessions.items():
             if key.startswith(f"{server_name}/"):
                 ps.server_conn = conn
-                ps._channel_open = False
-                ps.channel = None
+                ps.notify_server_disconnected()
 
     async def unregister_server(self, server_name: str):
         conn = self.server_connections.pop(server_name, None)

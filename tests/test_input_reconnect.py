@@ -88,6 +88,38 @@ class InputReconnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.proxy.write_input(new, b'x'))
         self.assertTrue(await self.proxy.write_input(owner, b'y'))
 
+    async def test_agent_replacement_reconnects_existing_browser_and_restores_input(self):
+        owner = await self.join('owner')
+        self.proxy.buffer.extend(b'stale terminal replay')
+        self.conn.ws = Socket()
+        self.manager.server_connections['hpc'] = self.conn
+        replacement = Connection()
+
+        # The new agent can register before the old transport notices its loss.
+        await self.manager.register_server('hpc', replacement)
+        await asyncio.sleep(.02)
+        self.assertTrue(owner.closed, 'Browser must not remain on a dead channel')
+        self.assertFalse(self.proxy.buffer)
+        self.assertFalse(self.proxy._channel_open)
+
+        reconnected = await self.join('owner')
+        self.assertTrue(await self.proxy.write_input(reconnected, b'after reconnect'))
+        self.assertEqual(replacement.inputs, [gateway.pack_data(1, b'after reconnect')])
+        self.assertFalse(self.conn.inputs)
+
+    async def test_agent_replacement_does_not_disconnect_another_node(self):
+        viewer = Socket()
+        other = gateway.ProxySession(Connection(), 'other')
+        other.viewers[viewer] = None
+        other._channel_open = True
+        other.channel = 8
+        self.manager.proxy_sessions['other-node/other'] = other
+        await self.manager.register_server('hpc', Connection())
+        await asyncio.sleep(.02)
+        self.assertFalse(viewer.closed)
+        self.assertTrue(other._channel_open)
+        self.assertEqual(other.channel, 8)
+
     async def test_slow_presence_send_does_not_block_consecutive_keystrokes(self):
         owner = await self.join('owner')
         slow = await self.join('slow-viewer')

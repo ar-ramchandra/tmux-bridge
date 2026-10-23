@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reconnect browser terminals when an agent replaces a stale connection, preventing a connected-looking terminal from silently discarding input on a dead channel.
 - Restore terminal keyboard focus when selecting or switching desktop sessions. Preserve keyboard tab navigation and mobile keyboard behavior.
 
 ## 0.1.0a1
