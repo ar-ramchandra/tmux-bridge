@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Scroll full-screen applications with empty tmux history using application paging, coalesce touch movement into pages, and retain remote touch scrolling when copy mode changes screen buffers. Validate visible content changes and draft preservation.
 - Reconnect browser terminals when an agent replaces a stale connection, preventing a connected-looking terminal from silently discarding input on a dead channel.
 - Restore terminal keyboard focus when selecting or switching desktop sessions. Preserve keyboard tab navigation and mobile keyboard behavior.
 

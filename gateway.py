@@ -490,7 +490,7 @@ async def _auto_start_cloudflared():
 @app.get("/")
 async def index():
     return HTMLResponse(HTML, headers={
-        "X-Bridge-Version": "2026-10-22-terminal-focus",
+        "X-Bridge-Version": "2026-10-24-fullscreen-scroll",
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Pragma": "no-cache", "Expires": "0",
     })
@@ -3337,14 +3337,22 @@ async function handleUpload(input){
 // Send one scroll RPC at a time and coalesce gestures while it is in flight.
 let touchScrollPending=null,touchScrollInFlight=false,touchScrollTimer=null,remoteHistoryPane=null;
 let wheelScrollDelta=0,wheelScrollKey='',wheelScrollTime=0;
+let pageScrollCredit=0,lastScrollQueuedAt=0;
 function resetTouchScroll(){
  touchScrollPending=null;touchScrollInFlight=false;clearTimeout(touchScrollTimer);remoteHistoryPane=null;
  wheelScrollDelta=0;wheelScrollKey='';wheelScrollTime=0;
+ pageScrollCredit=0;lastScrollQueuedAt=0;
 }
 function flushTouchScroll(){
  if(touchScrollInFlight||!touchScrollPending||!canSend())return;
  const pending=touchScrollPending;touchScrollPending=null;
  if(pending.key!==sessionKey())return;
+ // A page key already moved a screenful. Consume the remaining motion in this
+ // gesture before paging again, rather than sending a page for every touchmove.
+ if(Math.sign(pending.lines)===Math.sign(pageScrollCredit)){
+  const covered=Math.sign(pending.lines)*Math.min(Math.abs(pending.lines),Math.abs(pageScrollCredit));
+  pending.lines-=covered;pageScrollCredit-=covered;
+ }else pageScrollCredit=0;
  const lines=Math.max(-24,Math.min(24,pending.lines));
  if(!lines)return;
  if(lines!==pending.lines)touchScrollPending={...pending,lines:pending.lines-lines};
@@ -3356,6 +3364,9 @@ function flushTouchScroll(){
  },12000);
 }
 function queueTouchScroll(lines,x,y){
+ const now=performance.now();
+ if(now-lastScrollQueuedAt>250)pageScrollCredit=0;
+ lastScrollQueuedAt=now;
  const rect=document.querySelector('.xterm-screen').getBoundingClientRect();
  const col=Math.max(1,Math.min(term.cols,Math.floor((x-rect.left)/rect.width*term.cols)+1));
  const row=Math.max(1,Math.min(term.rows,Math.floor((y-rect.top)/rect.height*term.rows)+1));
@@ -3367,6 +3378,7 @@ function queueTouchScroll(lines,x,y){
 function handleTouchScrollResult(msg){
  clearTimeout(touchScrollTimer);touchScrollInFlight=false;
  if(!msg.ok){touchScrollPending=null;notifyUser(msg.error||'Live scrolling failed. Try Select / History.');return;}
+ pageScrollCredit=msg.page_rows?Math.sign(msg.lines)*Math.max(0,msg.page_rows-Math.abs(msg.lines)):0;
  remoteHistoryPane=msg.copy_mode?msg.pane:null;updateJumpButton();flushTouchScroll();
 }
 // Own desktop wheel events before xterm can translate an alternate-buffer
@@ -3407,7 +3419,7 @@ document.getElementById('terminal-container').addEventListener('wheel',e=>{
   const t=e.touches[0];const dy=gesture.y-t.clientY;gesture.y=t.clientY;
   if(Math.abs(t.clientY-gesture.startY)<8)return;
   if(e.cancelable)e.preventDefault();e.stopImmediatePropagation();
-  const remote=term.buffer.active.type==='alternate'||term.modes.mouseTrackingMode!=='none';
+  const remote=term.buffer.active.type==='alternate'||term.modes.mouseTrackingMode!=='none'||remoteHistoryPane!==null;
   if(remote && !canSend()){
    if(t.clientY>gesture.startY){gesture=null;showHistory(true);}return;
   }
@@ -4254,7 +4266,7 @@ function openSessionSocket(server,session,distance) {
   const old=ws;if(old){old.onclose=null;old.onmessage=null;old.close();}
   const proto=location.protocol==='https:'?'wss':'ws';
   const socket=new WebSocket(proto+'://'+location.host+'/ws/'+encodeURIComponent(server)+'/'+encodeURIComponent(session)+
-    '?cols='+term.cols+'&rows='+term.rows+'&device='+encodeURIComponent(deviceLabel)+'&client_id='+clientId+'&ui_version=2026-10-22-terminal-focus');
+    '?cols='+term.cols+'&rows='+term.rows+'&device='+encodeURIComponent(deviceLabel)+'&client_id='+clientId+'&ui_version=2026-10-24-fullscreen-scroll');
   ws=socket;socket.binaryType='arraybuffer';hasInput=false;updateInputState();
   const current=()=>ws===socket && currentServer===server && currentSession===session;
   let replayPending=true;

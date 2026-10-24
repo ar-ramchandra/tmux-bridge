@@ -1,5 +1,7 @@
 """Exercise history against an isolated tmux server; never touch the user's socket."""
 import ast
+import shlex
+import sys
 import pathlib
 import subprocess
 import tempfile
@@ -64,6 +66,36 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(self.scroll({'session': 'missing', 'lines': -3})['status'], 404)
         self.assertEqual(self.scroll({'session': 'history-test', 'lines': 'not-a-number'})['status'], 400)
         self.assertEqual(self.scroll({'session': 'history-test', 'lines': -3, 'col': 10000})['status'], 400)
+
+    def test_empty_history_fullscreen_application_pages_without_touching_draft(self):
+        name = 'application-pager'
+        command = shlex.join([sys.executable, str(ROOT / 'tests/fixtures/fullscreen_pager.py')])
+        self.tmux_run(['tmux', 'new-session', '-d', '-s', name, '-x', '80', '-y', '24', command], check=True)
+        def screen():
+            return self.history({'session': name})['body']['text']
+        def wait_for(text):
+            for _ in range(60):
+                content = screen()
+                if text in content: return
+                time.sleep(.025)
+            self.fail('Missing %r in %r' % (text, content))
+        try:
+            wait_for('PAGER_READY')
+            self.tmux_run(['tmux', 'send-keys', '-t', name, '-l', 'saved-draft'], check=True)
+            wait_for('DRAFT=saved-draft')
+            result = self.scroll({'session': name, 'lines': -3, 'col': 10, 'row': 5})
+            self.assertEqual(result['status'], 200)
+            wait_for('APPLICATION_PAGE=1')
+            self.assertFalse(result['body']['copy_mode'])
+            self.scroll({'session': name, 'lines': 3, 'col': 10, 'row': 5})
+            wait_for('APPLICATION_PAGE=0')
+            self.tmux_run(['tmux', 'send-keys', '-t', name, '-l', '--', '-after'], check=True)
+            wait_for('DRAFT=saved-draft-after')
+            self.assertIn('ARROWS=0', screen())
+            mode = self.tmux_run(['tmux', 'display-message', '-p', '-t', name, '#{pane_mode}'], capture_output=True, text=True)
+            self.assertEqual(mode.stdout.strip(), '')
+        finally:
+            self.tmux_run(['tmux', 'kill-session', '-t', name], capture_output=True)
 
     def test_missing_session(self):
         self.assertEqual(self.history({'session': 'missing'})['status'], 404)

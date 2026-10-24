@@ -89,6 +89,16 @@ const passed=[];
    assert(scrolls.length>0);assert(scrolls.every(s=>s.type==='scroll'&&s.lines<0));
    assert.equal(await page.locator('#history-modal').evaluate(d=>d.open),false);
   });
+  await test('touch keeps scrolling remote copy mode after alternate screen ends',async()=>{
+   await page.evaluate(async()=>{
+    await new Promise(r=>term.write('\x1b[?1049l\x1b[?1000l\x1b[?1006l',r));
+    remoteHistoryPane='%1';hasInput=true;window.testSends=[];
+   });
+   await swipe(180,220,420);
+   const sends=await page.evaluate(()=>window.testSends.map(s=>JSON.parse(s)));
+   assert(sends.some(s=>s.type==='scroll'&&s.lines<0));
+   assert(sends.every(s=>s.type==='scroll'));
+  });
   await test('read-only alternate-screen swipe opens scrollable history without input',async()=>{
    await page.evaluate(async()=>{await new Promise(r=>term.write('\x1b[?1049h',r));hasInput=false;updateInputState();window.testSends=[];});
    await swipe(180,220,420);

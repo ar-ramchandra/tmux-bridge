@@ -416,7 +416,8 @@ def _rpc_scroll(body: dict) -> dict:
         result = subprocess.run(
             ["tmux", "list-panes", "-t", "=" + name + ":", "-F",
              "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t"
-             "#{pane_mode}\t#{mouse_any_flag}\t#{mouse_sgr_flag}\t#{mouse_utf8_flag}"],
+             "#{pane_mode}\t#{mouse_any_flag}\t#{mouse_sgr_flag}\t#{mouse_utf8_flag}\t"
+             "#{alternate_on}\t#{history_size}"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode:
@@ -424,7 +425,7 @@ def _rpc_scroll(body: dict) -> dict:
         pane = None
         for line in result.stdout.splitlines():
             fields = line.split("\t")
-            if len(fields) != 9:
+            if len(fields) != 11:
                 continue
             left, top, width, height = map(int, fields[1:5])
             if left < col <= left + width and top < row <= top + height:
@@ -447,6 +448,18 @@ def _rpc_scroll(body: dict) -> dict:
             # -H sends bytes to this pane; no browser WheelEvent or mouse binding required.
             command = ["tmux", "send-keys", "-t", pane_id, "-H"] + ["%02x" % byte for byte in report * abs(lines)]
             copy_mode = False
+        elif not mode and pane[9] == "1" and pane[10] == "0":
+            # Full-screen apps may own their transcript without requesting mouse
+            # reports. Empty tmux history cannot scroll it. Use standard paging,
+            # never Up/Down (which can recall prompts in interactive CLIs).
+            sent = subprocess.run(
+                ["tmux", "send-keys", "-t", pane_id, "PageUp" if lines < 0 else "PageDown"],
+                capture_output=True, timeout=5,
+            )
+            if sent.returncode:
+                return {"status": 500, "body": {"ok": False, "error": "application scroll failed"}}
+            return {"status": 200, "body": {"ok": True, "copy_mode": False, "pane": pane_id,
+                                           "page_rows": max(1, height - 3), "lines": lines}}
         else:
             if not mode:
                 if lines > 0:

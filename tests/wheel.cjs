@@ -22,7 +22,7 @@ const html=fs.readFileSync(path.join(__dirname,'../gateway.py'),'utf8').split('H
     send(data){
      window.testSends.push(data);
      if(typeof data==='string'&&data.startsWith('{')&&JSON.parse(data).type==='scroll')
-      setTimeout(()=>this.onmessage?.({data:JSON.stringify({type:'scroll_result',ok:true,copy_mode:true,pane:'%1'})}),0);
+      setTimeout(()=>this.onmessage?.({data:JSON.stringify({type:'scroll_result',ok:true,copy_mode:true,pane:'%1',lines:JSON.parse(data).lines,...window.scrollReply})}),0);
     }
     close(){this.readyState=3;}
    };
@@ -75,6 +75,18 @@ const html=fs.readFileSync(path.join(__dirname,'../gateway.py'),'utf8').split('H
   });
   await page.waitForTimeout(150);sent=await scrolls();assert.equal(sent[0].lines,-2);
   console.log('PASS wheel line units retain their intended distance');
+
+  await mode('');
+  await page.evaluate(()=>{window.scrollReply={copy_mode:false,page_rows:24};queueTouchScroll(-2,100,100);});
+  await page.waitForFunction(()=>pageScrollCredit===-22);
+  await page.evaluate(()=>{for(let i=0;i<8;i++)queueTouchScroll(-2,100,100);});
+  await page.waitForTimeout(50);
+  assert.equal((await scrolls()).length,1);
+  await page.evaluate(()=>queueTouchScroll(2,100,100));
+  await page.waitForTimeout(50);
+  sent=await scrolls();assert.equal(sent.length,2);assert(sent[1].lines>0);
+  await page.evaluate(()=>{resetTouchScroll();window.scrollReply=undefined;});
+  console.log('PASS full-screen paging coalesces one gesture and reverses direction immediately');
 
   await mode('');
   await page.evaluate(()=>{
