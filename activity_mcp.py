@@ -33,25 +33,27 @@ class ActivityReader:
 
 def build_server(reader):
     from mcp.server import MCPServer
+    from mcp.types import ToolAnnotations
     mcp=MCPServer('Tmux Bridge activity',instructions='Read-only prompt lifecycle metadata. Response finished does not verify the user goal. Poll get_events using next_cursor; notifications do not automatically start an agent turn.')
+    readonly=ToolAnnotations(readOnlyHint=True,destructiveHint=False,idempotentHint=True,openWorldHint=False)
 
-    @mcp.tool()
+    @mcp.tool(annotations=readonly)
     async def list_sessions() -> dict:
         """List observed provider threads in permitted sessions; no terminal text or credentials."""
         return {'sessions':await asyncio.to_thread(reader.sessions)}
 
-    @mcp.tool()
+    @mcp.tool(annotations=readonly)
     async def get_prompt_status(server: str, session: str, thread_id: str = '') -> dict:
         """Read the latest observed prompt status; transport silence never means completion."""
         sessions=await asyncio.to_thread(reader.sessions)
         return {'sessions':[e for e in sessions if e['server']==server and e['session']==session and (not thread_id or e['thread_id']==thread_id)]}
 
-    @mcp.tool()
+    @mcp.tool(annotations=readonly)
     async def get_events(after_cursor: int = 0) -> dict:
         """Read durable events. Save next_cursor even for empty pages; history_gap means older events expired."""
         return await asyncio.to_thread(reader.events,after_cursor)
 
-    @mcp.tool()
+    @mcp.tool(annotations=readonly)
     async def wait_for_events(after_cursor: int = 0, timeout_seconds: int = 20) -> dict:
         """Wait up to 25 seconds for permitted events; repeat with next_cursor to keep observing."""
         deadline=time.monotonic()+max(0,min(25,timeout_seconds))
