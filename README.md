@@ -95,3 +95,9 @@ The gateway can read terminal traffic and control connected agents. In the optio
 ## License
 
 MIT. See [LICENSE](LICENSE) and [third-party acknowledgments](THIRD_PARTY.md).
+## Prompt status and notifications
+
+Provider hooks can show prompt status in the session list, notify browsers and
+phones, and expose read-only completion events to connected agents through MCP.
+See [setup and notification settings](docs/activity.md). You retain direct control
+of each terminal; response completion does not imply the whole goal is verified.

@@ -42,12 +42,17 @@ from protocol import (
 )
 import cloudflare
 from browser_security import BrowserOriginMiddleware
+from activity_gateway import ActivityGateway
 
 app = FastAPI()
 app.add_middleware(BrowserOriginMiddleware)
 
 LAYOUT_FILE = (Path(os.environ["TMUX_BRIDGE_CONFIG_DIR"]).expanduser() / "layout.json"
                if os.environ.get("TMUX_BRIDGE_CONFIG_DIR") else Path.home() / ".config/tmux-bridge/layout.json")
+
+activity_gateway = ActivityGateway(Path(os.environ.get('TMUX_BRIDGE_ACTIVITY_DIR',
+    str(Path(os.environ.get('TMUX_BRIDGE_CONFIG_DIR',str(Path.home()/'.config/tmux-bridge')))/'activity'))))
+app.include_router(activity_gateway.router())
 
 
 def load_layout() -> dict:
@@ -463,6 +468,15 @@ gw_manager = GatewayManager()
 async def startup():
     await gw_manager.start()
     asyncio.create_task(_auto_start_cloudflared())
+    app.state.activity_worker = asyncio.create_task(activity_gateway.worker())
+
+
+@app.on_event("shutdown")
+async def stop_activity():
+    task = getattr(app.state, 'activity_worker', None)
+    if task:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def _auto_start_cloudflared():
@@ -490,7 +504,7 @@ async def _auto_start_cloudflared():
 @app.get("/")
 async def index():
     return HTMLResponse(HTML, headers={
-        "X-Bridge-Version": "2026-10-24-fullscreen-scroll",
+        "X-Bridge-Version": "2026-10-29-activity",
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Pragma": "no-cache", "Expires": "0",
     })
@@ -712,6 +726,17 @@ async def server_ws(websocket: WebSocket):
                     conn.resolve_rpc(msg["id"], msg["status"], msg["body"])
                 elif msg_type == MSG_SESSION_UPDATE:
                     conn.sessions = msg.get("sessions", [])
+                elif msg_type == 'activity_events':
+                    # One bounded metadata job per connection. Never hold the
+                    # terminal receive loop on SQLite or notification work.
+                    if not getattr(conn, '_activity_task', None) or conn._activity_task.done():
+                        async def accept_activity(events, identity=server_name):
+                            try:
+                                ids = await activity_gateway.receive(identity, events)
+                                await websocket.send_text(json.dumps({'type':'activity_ack','ids':ids}))
+                            except Exception:
+                                pass  # Unacknowledged events retry on the node.
+                        conn._activity_task = asyncio.create_task(accept_activity(msg.get('events')))
                 elif msg_type == MSG_CHANNEL_CLOSED:
                     for ps in list(gw_manager.proxy_sessions.values()):
                         if ps.server_conn is conn and ps.channel == msg.get("channel"):
@@ -2034,6 +2059,7 @@ HTML = r"""<!DOCTYPE html>
         <div class="username">Operator</div>
       </div>
       <div class="user-btns">
+        <button class="ctl-btn" title="Notification settings" aria-label="Notification settings" onclick="window.bridgeActivity?.settings()">&#9881;</button>
         <button class="ctl-btn" id="mic-btn" title="Pause terminal input" aria-label="Pause terminal input" aria-pressed="false" onclick="toggleMic()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -3994,6 +4020,7 @@ function renderSidebar() {
       '</span><span class="s-actions">' +
       '<button class="s-btn s-move" title="Move to dir">' + moveSvg + '</button>' +
       '<button class="s-btn s-close" title="Kill session">' + closeSvg + '</button></span>';
+    window.bridgeActivity?.decorateItem(div, currentServer, s.name);
     div.querySelector('.s-name').addEventListener('click', () => {
       connect(s.name); closeSidebar();
     });
@@ -4407,6 +4434,7 @@ setInterval(async () => {
 setInterval(() => { if (onServer && currentServer) loadSessions(); }, 15000);
 
 </script>
+<script src="/activity.js"></script>
 </body>
 </html>"""
 

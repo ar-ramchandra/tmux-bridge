@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added provider prompt status in the session list and active terminal header.
+- Added per-device browser/phone push settings, event and node filters, sound,
+  and a test notification action.
+- Added read-only MCP tools for scoped status queries and durable event polling.
+- Added additive Codex/Claude hooks and optional OpenCode plugin generation.
+- Kept notification storage and delivery separate from terminal input; queued
+  events retry across reconnects, including on legacy Python 3.8 node agents.
+
 - Scroll full-screen applications with empty tmux history using application paging, coalesce touch movement into pages, and retain remote touch scrolling when copy mode changes screen buffers. Validate visible content changes and draft preservation.
 - Reconnect browser terminals when an agent replaces a stale connection, preventing a connected-looking terminal from silently discarding input on a dead channel.
 - Restore terminal keyboard focus when selecting or switching desktop sessions. Preserve keyboard tab navigation and mobile keyboard behavior.

@@ -25,9 +25,19 @@ Documentation = "https://github.com/ar-ramchandra/tmux-bridge/tree/main/docs"
 
 [project.scripts]
 tmux-bridge = "bridge_cli:main"
+tmux-bridge-activity = "integrations:main"
+tmux-bridge-mcp = "activity_mcp:main"
+
+[project.optional-dependencies]
+notifications = ["pywebpush==2.5.0"]
+mcp = ["mcp==2.3.0"]
 
 [tool.setuptools]
-py-modules = ["bridge_cli", "gateway", "server", "auth", "protocol", "cloudflare", "sysinfo", "browser_security", "mtls_proxy", "transport_pki", "node_setup", "node_install", "node_runtime"]
+py-modules = ["bridge_cli", "gateway", "server", "auth", "protocol", "cloudflare", "sysinfo", "browser_security", "mtls_proxy", "transport_pki", "node_setup", "node_install", "node_runtime", "activity", "activity_gateway", "activity_mcp", "integrations"]
+packages = ["tmux_bridge_assets"]
+
+[tool.setuptools.package-data]
+tmux_bridge_assets = ["*.js"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}

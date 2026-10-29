@@ -3,7 +3,7 @@
   "version": "0.1.0-alpha.1",
   "private": true,
   "scripts": {
-    "test": "node tests/browser.cjs && node tests/wheel.cjs && node tests/selection.cjs && node tests/direct-display.cjs && node tests/focus.cjs"
+    "test": "node tests/browser.cjs && node tests/wheel.cjs && node tests/selection.cjs && node tests/direct-display.cjs && node tests/focus.cjs && node tests/activity.cjs"
   },
   "devDependencies": {
     "playwright": "1.59.1"

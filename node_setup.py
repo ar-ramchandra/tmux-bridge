@@ -195,7 +195,7 @@ def create_bundle(name,root=None,output=None,port=14603,api=None):
                 allowed_path=root/'transport/allowed-clients.json'
                 allowed=json.loads(allowed_path.read_text());allowed[state['fingerprint']]=name
                 save_json(allowed_path,allowed)
-                files={f:(SOURCE/f).read_bytes() for f in ('server.py','protocol.py','auth.py','sysinfo.py','node_runtime.py')}
+                files={f:(SOURCE/f).read_bytes() for f in ('server.py','protocol.py','auth.py','sysinfo.py','node_runtime.py','activity.py','integrations.py')}
                 files.update({'server.key':key,'server.crt':cert,'ca.crt':ca,
                     'tls.key':(directory/'tls/tls.key').read_bytes(),
                     'tls.crt':(directory/'tls/tls.crt').read_bytes(),

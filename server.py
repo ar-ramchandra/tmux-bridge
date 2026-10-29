@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import websockets
+from activity import forward_activity, acknowledge_activity
 from websockets.exceptions import ConnectionClosedError
 
 from protocol import (
@@ -762,11 +763,14 @@ class ServerAgent:
 
             # Start session update poller
             update_task = asyncio.create_task(self._session_update_loop(ws))
+            activity_task = asyncio.create_task(forward_activity(ws, CONFIG_DIR))
 
             try:
                 await self._message_loop(ws)
             finally:
                 update_task.cancel()
+                activity_task.cancel()
+                await asyncio.gather(activity_task, return_exceptions=True)
                 await self.manager.stop_all()
                 self.ws = None
 
@@ -795,6 +799,14 @@ class ServerAgent:
                     await self._handle_rpc(ws, msg)
                 elif msg_type == MSG_PING:
                     await ws.send(make_pong())
+                elif msg_type == 'activity_ack':
+                    if not getattr(self, '_activity_ack_task', None) or self._activity_ack_task.done():
+                        async def save_activity_ack(ids):
+                            try:
+                                await acknowledge_activity(CONFIG_DIR,ids)
+                            except Exception:
+                                pass  # Safe to replay; gateway deduplicates.
+                        self._activity_ack_task=asyncio.create_task(save_activity_ack(msg.get('ids')))
 
     async def _handle_connect(self, ws, msg: dict):
         channel = msg["channel"]

@@ -1,5 +1,7 @@
 include LICENSE README.md SECURITY.md THIRD_PARTY.md CONTRIBUTING.md CHANGELOG.md
 include requirements.txt setup.sh add-node.sh start-gateway.sh
+include requirements-integrations.txt
+recursive-include tmux_bridge_assets *.js
 include package.json package-lock.json
 recursive-include docs *.md
 recursive-include tests *.py *.cjs
