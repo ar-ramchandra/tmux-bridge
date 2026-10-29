@@ -126,6 +126,36 @@ const html=fs.readFileSync(path.join(__dirname,'../gateway.py'),'utf8').split('H
   assert.deepEqual(await page.evaluate(()=>window.opened.map(l=>l.url)),['https://example.com/tap']);
   assert.deepEqual(await page.evaluate(()=>window.sent),[]);
   console.log('PASS direct touch tap opens a URL without terminal input');
+
+  await page.setViewportSize({width:390,height:844});
+  await page.waitForFunction(()=>isTouchDevice);
+  await page.evaluate(()=>{hasInput=false;clearInputClaim();updateInputState();term.blur();});
+  await write('Tap here to type');
+  p=await point(5);await page.touchscreen.tap(p.x,p.y);
+  assert.equal(await page.evaluate(()=>document.activeElement===term.textarea),true);
+  await page.keyboard.type('first');
+  assert.deepEqual(await page.evaluate(()=>window.sent.filter(s=>typeof s==='string'&&!s.includes('"resize"'))),
+    [JSON.stringify({type:'take_input'}),'f','i','r','s','t']);
+  // Even an older presence update must not discard keys during the handoff.
+  await page.evaluate(()=>handleMessage({data:JSON.stringify({type:'presence',sessions:{direct:{viewers:[{id:clientId,active:false}]}}})}));
+  await page.keyboard.type('x');
+  assert.equal(await page.evaluate(()=>window.sent.at(-1)),'x');
+  await page.evaluate(()=>handleMessage({data:JSON.stringify({type:'presence',sessions:{direct:{viewers:[{id:clientId,active:true}]}}})}));
+  assert.equal(await page.evaluate(()=>hasInput&&inputClaimSocket===null),true);
+  console.log('PASS phone tap claims input before the first keystroke without waiting for presence');
+
+  await page.evaluate(()=>{hasInput=false;clearInputClaim();updateInputState();});
+  await write('https://example.com/view-only');
+  p=await point(5);await page.touchscreen.tap(p.x,p.y);
+  assert.deepEqual(await page.evaluate(()=>window.opened.map(l=>l.url)),['https://example.com/view-only']);
+  assert.deepEqual(await page.evaluate(()=>window.sent.filter(s=>!s.includes('\"resize\"'))),[]);
+  await page.evaluate(()=>{term.blur();window.sent=[];});
+  await page.locator('#kbd-btn').click();
+  assert.equal(await page.evaluate(()=>document.activeElement===term.textarea),true);
+  assert.equal(await page.evaluate(()=>JSON.parse(window.sent[0]).type),'take_input');
+  await page.evaluate(()=>closeConnection());
+  assert.equal(await page.evaluate(()=>inputClaimSocket),null);
+  console.log('PASS spectator links stay read-only; keyboard button can claim input; disconnect clears handoff');
   }
   assert.deepEqual(errors,[]);
  }finally{await browser.close();}

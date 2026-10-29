@@ -88,6 +88,16 @@ class InputReconnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.proxy.write_input(new, b'x'))
         self.assertTrue(await self.proxy.write_input(owner, b'y'))
 
+    async def test_explicit_phone_claim_accepts_first_key_and_rejects_old_owner(self):
+        desktop = await self.join('desktop')
+        phone = await self.join('phone')
+        self.assertIs(self.proxy.active_input, desktop)
+        # This is the order of the phone's WebSocket frames after a typing tap.
+        await self.proxy.set_active(phone)
+        self.assertTrue(await self.proxy.write_input(phone, b'first'))
+        self.assertFalse(await self.proxy.write_input(desktop, b'old'))
+        self.assertEqual(self.conn.inputs, [gateway.pack_data(1, b'first')])
+
     async def test_agent_replacement_reconnects_existing_browser_and_restores_input(self):
         owner = await self.join('owner')
         self.proxy.buffer.extend(b'stale terminal replay')

@@ -21,7 +21,13 @@ The compact key controls provide Escape, modifier keys and navigation keys. Ctrl
 
 Closing a tab keeps the underlying session running. Reordering tabs affects your browser's saved order. Only the selected tab attaches to its terminal stream.
 
-“Take control” determines who currently sends terminal input. A new viewer does not automatically displace the current controller. “Viewing only” does not reduce a user's privileges elsewhere in the gateway.
+A new viewer does not automatically displace the current controller. Typing or
+pasting into the terminal takes control; on a phone, tapping plain terminal text
+or the keyboard button also takes control. The first keystroke follows the claim
+on the same connection. Scrolling, selecting text, and opening links do not claim
+control. The existing control button still lets you take or release it explicitly.
+Viewing without input control does not reduce a user's privileges elsewhere in
+the gateway.
 
 ## Updates
 

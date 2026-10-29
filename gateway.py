@@ -3007,7 +3007,11 @@ document.addEventListener('mouseup',event=>{
 displayContainer.addEventListener('click',event=>{
   if(event.button!==0 || !displayPointer || displayPointer.moved || displayPointer.forwarded || displayPointer.opened)return;
   const url=displayURLAt(event.clientX,event.clientY);
-  if(url && url===displayPointer.url){event.stopImmediatePropagation();openTerminalLink(event,url);}
+  if(url && url===displayPointer.url){event.stopImmediatePropagation();openTerminalLink(event,url);return;}
+  if(event.detail<=1 && !term.hasSelection() && !window.getSelection()?.toString() && !document.querySelector('dialog[open]')){
+    if(isTouchDevice)takeControlForTyping();
+    term.focus();
+  }
 },true);
 function updateDisplayHover() {
   if(!displayHover)return;
@@ -3056,7 +3060,20 @@ function notifyUser(message) {
   if(document.getElementById('history-modal').open)document.getElementById('history-status').textContent=message;
   clearTimeout(noticeTimer); noticeTimer = setTimeout(() => el.classList.remove('visible'), 5000);
 }
-function canSend() { return !!(ws && ws.readyState === WebSocket.OPEN && hasInput && currentSession); }
+let inputClaimSocket=null,inputClaimTimer=null;
+function clearInputClaim(){clearTimeout(inputClaimTimer);inputClaimTimer=null;inputClaimSocket=null;}
+function takeControlForTyping(){
+  if(!ws || ws.readyState!==WebSocket.OPEN || !currentSession)return false;
+  if(hasInput || inputClaimSocket===ws)return true;
+  isMuted=false;document.getElementById('mic-btn').classList.remove('barred');
+  inputClaimSocket=ws;
+  // WebSocket frames are ordered: the server handles this claim before any
+  // following keystrokes, including the first character typed during handoff.
+  ws.send(JSON.stringify({type:'take_input'}));
+  inputClaimTimer=setTimeout(()=>{clearInputClaim();updateInputState();},3000);
+  updateInputState();return true;
+}
+function canSend() { return !!(ws && ws.readyState === WebSocket.OPEN && (hasInput||inputClaimSocket===ws) && currentSession); }
 function sendKey(seq, quiet = false) {
   if (!canSend()) {
     if (!quiet) notifyUser(!ws || ws.readyState !== WebSocket.OPEN ? 'Not connected. Your input was not sent.' : 'Viewing only. Take control to type.');
@@ -3066,9 +3083,10 @@ function sendKey(seq, quiet = false) {
 }
 function updateInputState() {
   const connected = !!(ws && ws.readyState === WebSocket.OPEN && currentSession);
-  const label = connected ? (hasInput ? 'You have control' : 'Viewing only — take control to type') : 'Disconnected';
+  const label = connected ? (hasInput ? 'You have control' : inputClaimSocket===ws ? 'Taking control…' : 'Tap the terminal to type') : 'Disconnected';
   document.getElementById('input-state').textContent = label;
   document.querySelectorAll('[data-terminal-key],#ctrl-key,#alt-key,#kbd-btn').forEach(b => b.disabled = !connected || !hasInput);
+  document.getElementById('kbd-btn').disabled=!connected;
   const claim = document.getElementById('conn-claim');
   claim.title = hasInput ? 'Release control' : 'Take control';
   claim.setAttribute('aria-label', claim.title);
@@ -3113,7 +3131,7 @@ function sendTerminalKey(key) {
   sendKey(seq);
 }
 function toggleKeyboard() {
-  if (!canSend()) return;
+  if (!takeControlForTyping()) return;
   if (document.activeElement === term.textarea) term.blur(); else term.focus();
 }
 term.textarea.setAttribute('autocapitalize','off');
@@ -3122,6 +3140,8 @@ term.textarea.setAttribute('autocorrect','off');
 term.textarea.spellcheck = false;
 term.textarea.addEventListener('focus',()=>{kbdOpen=true;document.getElementById('kbd-btn').setAttribute('aria-pressed','true');});
 term.textarea.addEventListener('blur',()=>{kbdOpen=false;document.getElementById('kbd-btn').setAttribute('aria-pressed','false');});
+// Mobile keyboards and paste can produce input without a normal keydown.
+for(const type of ['beforeinput','paste'])term.textarea.addEventListener(type,e=>{if(e.isTrusted)takeControlForTyping();},true);
 function checkEscOverflow() { /* The compact grid keeps all keys within the viewport. */ }
 function openDialog(id) {
   cancelTerminalGesture();
@@ -3309,6 +3329,7 @@ term.attachCustomKeyEventHandler(e=>{
   if(key==='p')openShortcuts();else if(key==='f')showHistory();else if(key==='c')copyText(term.getSelection());else showPasteModal();
   return false;
  }
+ if(e.isTrusted && !['shift','control','alt','meta','capslock','escape'].includes(key) && !(e.metaKey||e.ctrlKey))takeControlForTyping();
  return true;
 });
 // Preserve terminal focus when accessory keys are pressed.
@@ -3689,12 +3710,11 @@ function claimControl() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   if (hasInput) {
     // Release control
+    clearInputClaim();
     ws.send(JSON.stringify({type: 'release_input'}));
   } else {
     // Claim control
-    ws.send(JSON.stringify({type: 'take_input'}));
-    isMuted = false;
-    document.getElementById('mic-btn').classList.remove('barred');
+    takeControlForTyping();
   }
 }
 
@@ -3712,6 +3732,7 @@ function toggleMic() {
   isMuted = !isMuted;
   btn.classList.toggle('barred', isMuted);
   if (isMuted) {
+    clearInputClaim();
     hasInput = false;
     term.options.cursorStyle = 'underline';
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -4263,6 +4284,7 @@ async function loadSessions() {
 }
 
 function closeConnection() {
+  clearInputClaim();
   if(currentServer && currentSession)terminalTabScroll.set(terminalTabKey(currentServer,currentSession),term.buffer.active.baseY-term.buffer.active.viewportY);
   clearTimeout(reconnectTimer); reconnectTimer=null;
   cancelTerminalGesture();resetTouchScroll();resetModifiers();savePasteDraft();
@@ -4289,17 +4311,19 @@ function reconnect(session) {
   openSessionSocket(currentServer,session,distance);
 }
 function openSessionSocket(server,session,distance) {
+  clearInputClaim();
   clearTimeout(reconnectTimer);reconnectTimer=null;
   const old=ws;if(old){old.onclose=null;old.onmessage=null;old.close();}
   const proto=location.protocol==='https:'?'wss':'ws';
   const socket=new WebSocket(proto+'://'+location.host+'/ws/'+encodeURIComponent(server)+'/'+encodeURIComponent(session)+
-    '?cols='+term.cols+'&rows='+term.rows+'&device='+encodeURIComponent(deviceLabel)+'&client_id='+clientId+'&ui_version=2026-10-24-fullscreen-scroll');
+    '?cols='+term.cols+'&rows='+term.rows+'&device='+encodeURIComponent(deviceLabel)+'&client_id='+clientId+'&ui_version=2026-10-29-direct-typing');
   ws=socket;socket.binaryType='arraybuffer';hasInput=false;updateInputState();
   const current=()=>ws===socket && currentServer===server && currentSession===session;
   let replayPending=true;
   socket.onopen=()=>{if(current()){setConnected(true);fitAddon.fit();}};
   socket.onclose=()=>{
     if(!current())return;
+    clearInputClaim();
     hasInput=false;cancelTerminalGesture();resetTouchScroll();setConnected(false);
     reconnectTimer=setTimeout(()=>{if(current())reconnect(session);},3000);
   };
@@ -4322,6 +4346,7 @@ function handleMessage(e) {
       if (msg.type === 'presence') {
         const me = (msg.sessions[currentSession]?.viewers || []).find(v => v.id === clientId);
         hasInput = !!me?.active && !isMuted;
+        if(hasInput)clearInputClaim();
         updateClaimButton();
         // Merge: update viewers from WS, but preserve tmux_clients from last API fetch
         Object.keys(msg.sessions).forEach(k => {
@@ -4344,6 +4369,7 @@ function handleMessage(e) {
       if (msg.type === 'return_live_result') { if (!msg.ok) notifyUser('Remote history could not be closed.'); else { remoteHistoryPane=null; updateJumpButton(); } return; }
       if (msg.type === 'scroll_result') { handleTouchScrollResult(msg); return; }
       if (msg.type === 'no_control') {
+        clearInputClaim();
         hasInput = false;
         updateClaimButton();
         term.options.cursorStyle = 'underline';
