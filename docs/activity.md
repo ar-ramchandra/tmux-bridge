@@ -20,6 +20,10 @@ Gateway activity is stored under `~/.config/tmux-bridge/activity/` by default.
 The database and generated VAPID signing key are private files. Back up the VAPID
 key with the deployment: replacing it requires browsers to subscribe again.
 
+`TMUX_BRIDGE_PUSH_SUBJECT` can specify the operator's contact as a `mailto:` URI
+or an HTTPS origin without a path (for example, `https://example.com`). The
+signing library's strict validator rejects HTTPS subjects containing paths.
+
 ## Connect provider hooks on each node
 
 Run these as the account that owns the terminal sessions, using the actual node

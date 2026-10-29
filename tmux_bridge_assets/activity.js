@@ -10,7 +10,10 @@
   const identity=(server,session)=>JSON.stringify([server,session]);
   async function api(path, options={}) {
     const response=await fetch(path,{...options,signal:AbortSignal.timeout(12000),headers:{'Content-Type':'application/json',...options.headers}});
-    if(!response.ok)throw new Error('Request failed ('+response.status+')');
+    if(!response.ok){
+      let detail;try{detail=await response.json();}catch{}
+      throw new Error(typeof detail?.error==='string'?detail.error.slice(0,300):'Request failed ('+response.status+')');
+    }
     return response.json();
   }
   const interested=e=>prefs.kinds.includes(e.kind)&&(!prefs.servers.length||prefs.servers.includes(e.server));

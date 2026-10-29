@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import os
 from pathlib import Path
 import tempfile
 import time
@@ -105,6 +106,35 @@ class ActivityTests(unittest.TestCase):
             self.assertEqual(client.get('/api/activity/snapshot').json()['sessions'],[])
             self.assertIn('bridgeActivity',client.get('/activity.js').text)
             self.assertEqual(client.post('/api/activity/push',json=[]).status_code,400)
+
+    def test_real_push_signing_and_encryption_for_test_and_background_delivery(self):
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import serialization
+        import jwt
+        import requests
+        subscriber=ec.generate_private_key(ec.SECP256R1())
+        public=subscriber.public_key().public_bytes(serialization.Encoding.X962,serialization.PublicFormat.UncompressedPoint)
+        subscription=self.subscription()
+        subscription['keys']['p256dh']=base64.urlsafe_b64encode(public).decode().rstrip('=')
+        gateway=ActivityGateway(self.root/'gateway')
+        identity=gateway.subscribe(subscription)
+        app=FastAPI();app.include_router(gateway.router())
+        response=requests.Response();response.status_code=201;response._content=b''
+        # Only replace HTTP transport. Exercise real VAPID validation, signing,
+        # and payload encryption; mocking webpush itself hid the original bug.
+        with patch.dict(os.environ,{},clear=True),patch('requests.post',return_value=response) as post:
+            with TestClient(app) as client:
+                result=client.post('/api/activity/push/'+identity+'/test')
+                self.assertEqual(result.status_code,200,result.text)
+            gateway.store.receive('node',self.event())
+            gateway.dispatch_push()
+            self.assertEqual(post.call_count,2)
+            private=serialization.load_pem_private_key((gateway.root/'push-private.pem').read_bytes(),password=None)
+            for call in post.call_args_list:
+                token=call.kwargs['headers']['Authorization'].split('t=',1)[1].split(',',1)[0]
+                claims=jwt.decode(token,private.public_key(),algorithms=['ES256'],audience='https://web.push.apple.com')
+                self.assertEqual(claims['sub'],'https://github.com')
+                self.assertNotIn(b'Notifications are enabled',call.kwargs['data'])
 
 
 class ForwardTests(unittest.IsolatedAsyncioTestCase):

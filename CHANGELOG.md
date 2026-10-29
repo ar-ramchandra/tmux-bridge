@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix push signing for phone notifications, exercise real signing/encryption in
+  tests, and show useful delivery errors without asking users to register again.
+
 - Added provider prompt status in the session list and active terminal header.
 - Added per-device browser/phone push settings, event and node filters, sound,
   and a test notification action.

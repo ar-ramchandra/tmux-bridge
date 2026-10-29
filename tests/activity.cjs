@@ -46,6 +46,13 @@ const script=fs.readFileSync(path.join(root,'tmux_bridge_assets/activity.js'),'u
   assert((await page.locator('[data-message]').textContent()).includes('In-app test'));
   await page.getByRole('button',{name:'Close',exact:true}).click();
   console.log('PASS mobile settings, per-device preferences, and in-app test');
+  await page.route('**/api/activity/push/test-sub/test',r=>r.fulfill({status:502,contentType:'application/json',body:JSON.stringify({error:'Push delivery failed on the gateway. Your device is still registered; please retry the test.'})}));
+  await page.evaluate(()=>{const key='bridge.notificationSettings.v1',p=JSON.parse(localStorage.getItem(key));p.pushId='test-sub';localStorage.setItem(key,JSON.stringify(p));});
+  await page.reload({waitUntil:'networkidle'});
+  await page.evaluate(()=>window.bridgeActivity.settings());
+  await page.getByRole('button',{name:'Test notification',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('[data-message]').textContent.includes('Your device is still registered'));
+  console.log('PASS push failure explains the server error without asking for re-registration');
   assert.deepEqual(errors,[]);
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

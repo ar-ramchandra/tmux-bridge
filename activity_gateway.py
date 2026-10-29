@@ -107,9 +107,26 @@ class ActivityGateway:
             db.execute('DELETE FROM push_subscriptions WHERE id=?',(identity,))
             db.execute('DELETE FROM push_jobs WHERE subscription_id=?',(identity,))
 
+    def send_push(self, subscription, payload, ttl):
+        from pywebpush import webpush
+        self.public_key()
+        # py-vapid's strict subject validator accepts HTTPS origins, not URL
+        # paths. Keep the default compatible; deployments can set a contact URI.
+        return webpush(subscription_info=subscription,data=json.dumps(payload),
+                       vapid_private_key=str(self.root/'push-private.pem'),
+                       vapid_claims={'sub':os.environ.get('TMUX_BRIDGE_PUSH_SUBJECT','https://github.com')},
+                       ttl=ttl,timeout=8)
+
+    @staticmethod
+    def log_push_error(error):
+        # Exceptions can contain subscription URLs and JWTs: never log their text.
+        code=getattr(getattr(error,'response',None),'status_code',None)
+        print('[ACTIVITY] Push delivery failed: '+type(error).__name__+
+              (' HTTP '+str(code) if code is not None else ''),flush=True)
+
     def dispatch_push(self):
         if not self.push_available():return
-        from pywebpush import webpush, WebPushException
+        from pywebpush import WebPushException
         # Recover after a process restart, but don't notify about old history.
         with self.store.connect() as db:
             cursor=db.execute('SELECT seq FROM push_cursor WHERE id=1').fetchone()[0]
@@ -138,17 +155,15 @@ class ActivityGateway:
                      'tag':'bridge-activity-'+str(job['seq']),'url':'/?activity='+str(job['seq'])}
             status='sent'
             try:
-                self.public_key()
-                webpush(subscription_info=json.loads(job['subscription']),data=json.dumps(payload),
-                        vapid_private_key=str(self.root/'push-private.pem'),
-                        vapid_claims={'sub':os.environ.get('TMUX_BRIDGE_PUSH_SUBJECT','https://github.com/ar-ramchandra/tmux-bridge')},
-                        ttl=3600,timeout=8)
+                self.send_push(json.loads(job['subscription']),payload,ttl=3600)
             except WebPushException as exc:
+                self.log_push_error(exc)
                 code=getattr(exc.response,'status_code',None)
                 if code in (404,410):
                     self.unsubscribe(job['subscription_id']);continue
                 status='failed' if job['attempts']>=4 else 'pending'
-            except Exception:
+            except Exception as exc:
+                self.log_push_error(exc)
                 status='failed' if job['attempts']>=4 else 'pending'
             with self.store.connect() as db:
                 db.execute('UPDATE push_jobs SET status=?,attempts=attempts+1,next_attempt=? WHERE seq=? AND subscription_id=?',
@@ -204,15 +219,14 @@ class ActivityGateway:
         @router.post('/api/activity/push/{identity}/test')
         async def test_push(identity:str):
             def send():
-                from pywebpush import webpush
                 with self.store.connect() as db:
                     row=db.execute('SELECT body FROM push_subscriptions WHERE id=?',(identity,)).fetchone()
                 if not row:raise ValueError('No subscription')
-                self.public_key()
-                webpush(subscription_info=json.loads(row[0]),data=json.dumps({'title':'Tmux Bridge','body':'Notifications are enabled on this device.','tag':'bridge-test','url':'/'}),
-                        vapid_private_key=str(self.root/'push-private.pem'),vapid_claims={'sub':os.environ.get('TMUX_BRIDGE_PUSH_SUBJECT','https://github.com/ar-ramchandra/tmux-bridge')},ttl=60,timeout=8)
+                self.send_push(json.loads(row[0]),{'title':'Tmux Bridge','body':'Notifications are enabled on this device.','tag':'bridge-test','url':'/'},ttl=60)
             try:await asyncio.to_thread(send);return {'ok':True}
-            except Exception:return JSONResponse({'error':'Push test failed. Re-enable notifications and try again.'},status_code=502)
+            except Exception as error:
+                self.log_push_error(error)
+                return JSONResponse({'error':'Push delivery failed on the gateway. Your device is still registered; please retry the test.'},status_code=502)
         @router.delete('/api/activity/push/{identity}')
         async def unsubscribe(identity:str):
             await asyncio.to_thread(self.unsubscribe,identity);return {'ok':True}
