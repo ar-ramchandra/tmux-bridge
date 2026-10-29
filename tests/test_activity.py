@@ -91,14 +91,14 @@ class ActivityTests(unittest.TestCase):
         gateway.store.receive('node',self.event())
         gateway.store.receive('other',self.event('waiting'))
         gateway.store.receive('node',self.event('waiting'))
-        with patch('pywebpush.webpush') as send:
+        with patch('activity_gateway.FOREGROUND_GRACE_SECONDS',0),patch('pywebpush.webpush') as send:
             gateway.dispatch_push();self.assertEqual(send.call_count,1)
             payload=json.loads(send.call_args.kwargs['data'])
             self.assertNotIn('thread',json.dumps(payload));self.assertNotIn('work',json.dumps(payload))
             ActivityGateway(self.root/'gateway').dispatch_push();self.assertEqual(send.call_count,1)
         self.assertEqual(identity,gateway.subscribe(self.subscription(),{'kinds':[]}))
         gateway.store.receive('node',self.event('waiting'))
-        with patch('pywebpush.webpush') as send:gateway.dispatch_push();send.assert_not_called()
+        with patch('activity_gateway.FOREGROUND_GRACE_SECONDS',0),patch('pywebpush.webpush') as send:gateway.dispatch_push();send.assert_not_called()
 
     def test_api_snapshot_script_and_validation(self):
         gateway=ActivityGateway(self.root/'gateway');app=FastAPI();app.include_router(gateway.router())
@@ -106,6 +106,52 @@ class ActivityTests(unittest.TestCase):
             self.assertEqual(client.get('/api/activity/snapshot').json()['sessions'],[])
             self.assertIn('bridgeActivity',client.get('/activity.js').text)
             self.assertEqual(client.post('/api/activity/push',json=[]).status_code,400)
+
+    def test_foreground_receipt_suppresses_only_that_device_and_event(self):
+        gateway=ActivityGateway(self.root/'gateway')
+        phone=gateway.subscribe(self.subscription())
+        other=self.subscription();other['endpoint']+='-other'
+        laptop=gateway.subscribe(other)
+        first,_=gateway.store.receive('node',self.event())
+        second,_=gateway.store.receive('node',self.event())
+        app=FastAPI();app.include_router(gateway.router())
+        with TestClient(app) as client:
+            url='/api/activity/push/'+phone+'/received'
+            self.assertEqual(client.post(url,json={'sequences':[first['seq']]}).status_code,200)
+            for invalid in [None,{},[True],[-1],[2**64],[1]*201]:
+                self.assertEqual(client.post(url,json={'sequences':invalid}).status_code,400)
+        with patch('activity_gateway.time.time',return_value=time.time()+10),patch('pywebpush.webpush') as send:
+            gateway.dispatch_push();self.assertEqual(send.call_count,3)
+            gateway.dispatch_push();self.assertEqual(send.call_count,3)
+        with gateway.store.connect() as db:
+            self.assertEqual(db.execute('SELECT status FROM push_jobs WHERE seq=? AND subscription_id=?',
+                                       (first['seq'],phone)).fetchone()[0],'foreground')
+
+    def test_background_grace_and_receipt_after_enqueue_survive_restart(self):
+        gateway=ActivityGateway(self.root/'gateway')
+        phone=gateway.subscribe(self.subscription())
+        first,_=gateway.store.receive('node',self.event())
+        second,_=gateway.store.receive('node',self.event())
+        with patch('pywebpush.webpush') as send:
+            gateway.dispatch_push();send.assert_not_called()
+            gateway.acknowledge_foreground(phone,[first['seq']])
+            with patch('activity_gateway.time.time',return_value=time.time()+10):
+                ActivityGateway(gateway.root).dispatch_push()
+            self.assertEqual(send.call_count,1)
+            self.assertIn(str(second['seq']),json.loads(send.call_args.kwargs['data'])['tag'])
+
+    def test_interrupted_send_recovers_and_receipt_cannot_relabel_sent_push(self):
+        gateway=ActivityGateway(self.root/'gateway')
+        phone=gateway.subscribe(self.subscription())
+        event,_=gateway.store.receive('node',self.event())
+        gateway.dispatch_push()
+        with gateway.store.connect() as db:
+            db.execute("UPDATE push_jobs SET status='sending',next_attempt=0")
+        with patch('pywebpush.webpush') as send:
+            ActivityGateway(gateway.root).dispatch_push();self.assertEqual(send.call_count,1)
+        gateway.acknowledge_foreground(phone,[event['seq']])
+        with gateway.store.connect() as db:
+            self.assertEqual(db.execute('SELECT status FROM push_jobs').fetchone()[0],'sent')
 
     def test_real_push_signing_and_encryption_for_test_and_background_delivery(self):
         from cryptography.hazmat.primitives.asymmetric import ec
@@ -122,7 +168,7 @@ class ActivityTests(unittest.TestCase):
         response=requests.Response();response.status_code=201;response._content=b''
         # Only replace HTTP transport. Exercise real VAPID validation, signing,
         # and payload encryption; mocking webpush itself hid the original bug.
-        with patch.dict(os.environ,{},clear=True),patch('requests.post',return_value=response) as post:
+        with patch('activity_gateway.FOREGROUND_GRACE_SECONDS',0),patch.dict(os.environ,{},clear=True),patch('requests.post',return_value=response) as post:
             with TestClient(app) as client:
                 result=client.post('/api/activity/push/'+identity+'/test')
                 self.assertEqual(result.status_code,200,result.text)

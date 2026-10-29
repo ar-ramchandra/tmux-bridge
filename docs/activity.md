@@ -74,10 +74,23 @@ optional; do not install both versions.
 Open **Notification settings** beside the user controls. Settings apply to this
 browser or Home Screen app independently of other devices:
 
-- In-app alerts and optional sound while open.
+- A brief vibration or tone while actively using the gateway; no completion
+  toast or push banner on that device. The foreground cue can be muted.
 - Response finished, needs input, and error filters.
 - Node filters; no nodes selected means all accessible nodes.
 - Enable/disable push and send a test notification.
+
+The test button previews the foreground cue. To test a background banner, lock
+the phone or leave the app before an agent finishes. iPhone uses a tone because
+web vibration is unavailable; interact with the app once to enable browser audio.
+
+Push waits six seconds for an explicit receipt from the visible, focused app.
+Only that device and event are suppressed, including when the foreground cue is
+muted. Other devices still receive their own notifications. Missing receipts
+(locked, closed, offline, or suspended app) fall back to normal push. Slow
+connections or a push already in flight can still produce a banner. The service
+worker always displays delivered pushes, as required by Safari; it never consumes
+a push silently. Session status labels remain visible without interrupting input.
 
 Push needs HTTPS (or a browser-recognized localhost secure context), browser
 permission, and the optional push dependency. On iPhone/iPad, add the gateway to

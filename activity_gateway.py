@@ -15,6 +15,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 from activity import ActivityStore, ALERT_KINDS, LABELS
 
+# Give the foreground poll time to acknowledge delivery before sending a push.
+FOREGROUND_GRACE_SECONDS = 6
+
 
 def notification_preferences(value):
     if not isinstance(value,dict):raise ValueError('Invalid preferences')
@@ -107,6 +110,21 @@ class ActivityGateway:
             db.execute('DELETE FROM push_subscriptions WHERE id=?',(identity,))
             db.execute('DELETE FROM push_jobs WHERE subscription_id=?',(identity,))
 
+    def acknowledge_foreground(self, identity, sequences):
+        if (not isinstance(sequences,list) or len(sequences)>200 or
+            any(type(seq) is not int or seq<=0 or seq>2**63-1 for seq in sequences)):
+            raise ValueError('Invalid event receipts')
+        with self.store.connect() as db:
+            sub=db.execute('SELECT start_seq FROM push_subscriptions WHERE id=?',(identity,)).fetchone()
+            if sub is None:raise ValueError('Unknown subscription')
+            for seq in sequences:
+                # Only this device's explicitly received events are suppressed.
+                # A locked, disconnected, or suspended app cannot acknowledge.
+                db.execute('''INSERT INTO push_jobs(seq,subscription_id,status)
+                    SELECT seq,?,'foreground' FROM events WHERE seq=? AND seq>?
+                    ON CONFLICT(seq,subscription_id) DO UPDATE SET status='foreground'
+                    WHERE push_jobs.status='pending' ''',(identity,seq,sub['start_seq']))
+
     def send_push(self, subscription, payload, ttl):
         from pywebpush import webpush
         self.public_key()
@@ -138,13 +156,21 @@ class ActivityGateway:
                     prefs=notification_preferences(json.loads(sub['preferences']))
                     if (row['seq']>sub['start_seq'] and row['received']>time.time()-3600 and event['kind'] in prefs['kinds']
                         and (not prefs['servers'] or row['server'] in prefs['servers'])):
-                        db.execute('INSERT OR IGNORE INTO push_jobs(seq,subscription_id) VALUES (?,?)',(row['seq'],sub['id']))
+                        db.execute('INSERT OR IGNORE INTO push_jobs(seq,subscription_id,next_attempt) VALUES (?,?,?)',
+                                   (row['seq'],sub['id'],row['received']+FOREGROUND_GRACE_SECONDS))
             if rows:db.execute('UPDATE push_cursor SET seq=? WHERE id=1',(rows[-1]['seq'],))
             jobs=db.execute('''SELECT j.*,s.body AS subscription,s.preferences,e.body AS event,e.server FROM push_jobs j
                 JOIN push_subscriptions s ON j.subscription_id=s.id JOIN events e ON e.seq=j.seq
-                WHERE j.status='pending' AND j.next_attempt<=? ORDER BY j.seq LIMIT 10''',(time.time(),)).fetchall()
+                WHERE j.status IN ('pending','sending') AND j.next_attempt<=? ORDER BY j.seq LIMIT 10''',(time.time(),)).fetchall()
             db.execute('DELETE FROM push_jobs WHERE seq NOT IN (SELECT seq FROM events)')
         for job in jobs:
+            # Atomically arbitrate against a foreground receipt. Recover this
+            # claim after a crash; never strand a notification in 'sending'.
+            with self.store.connect() as db:
+                claimed=db.execute("""UPDATE push_jobs SET status='sending',next_attempt=?
+                    WHERE seq=? AND subscription_id=? AND status IN ('pending','sending') AND next_attempt<=?""",
+                    (time.time()+60,job['seq'],job['subscription_id'],time.time())).rowcount
+            if not claimed:continue
             event=json.loads(job['event'])
             prefs=notification_preferences(json.loads(job['preferences']))
             if event['kind'] not in prefs['kinds'] or (prefs['servers'] and job['server'] not in prefs['servers']):
@@ -227,6 +253,16 @@ class ActivityGateway:
             except Exception as error:
                 self.log_push_error(error)
                 return JSONResponse({'error':'Push delivery failed on the gateway. Your device is still registered; please retry the test.'},status_code=502)
+        @router.post('/api/activity/push/{identity}/received')
+        async def foreground_receipt(identity:str,request:Request):
+            raw=await request.body()
+            if len(raw)>8192:return JSONResponse({'error':'Too many event receipts'},status_code=413)
+            try:
+                value=json.loads(raw)
+                await asyncio.to_thread(self.acknowledge_foreground,identity,value['sequences'])
+                return {'ok':True}
+            except (ValueError,TypeError,KeyError):
+                return JSONResponse({'error':'Invalid event receipts'},status_code=400)
         @router.delete('/api/activity/push/{identity}')
         async def unsubscribe(identity:str):
             await asyncio.to_thread(self.unsubscribe,identity);return {'ok':True}

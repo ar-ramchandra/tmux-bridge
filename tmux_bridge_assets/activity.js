@@ -4,8 +4,9 @@
   const key = 'bridge.notificationSettings.v1', seenKey = 'bridge.activitySeen.v1';
   function read(k, fallback) { try { return JSON.parse(localStorage.getItem(k)) || fallback; } catch { return fallback; } }
   function save(k, value) { try { localStorage.setItem(k, JSON.stringify(value)); } catch {} }
-  let prefs = {...{inApp:true,sound:false,kinds:['turn_finished','waiting','failed'],servers:[]},...read(key,{})};
-  let seen=read(seenKey,{}), cursor=0, initialized=false, registration=null, dialog=null;
+  const saved=read(key,{});
+  let prefs = {...{foregroundCue:saved.inApp!==false||saved.sound===true,kinds:['turn_finished','waiting','failed'],servers:[]},...saved};
+  let seen=read(seenKey,{}), cursor=0, initialized=false, registration=null, dialog=null, pollTimer=null, polling=false;
   const latest=new Map(), labels={running:'Working',waiting:'Needs input',turn_finished:'Response finished',failed:'Failed',interrupted:'Interrupted',idle:'Idle',stopped:'Session ended',task_completed:'Task reported complete'};
   const identity=(server,session)=>JSON.stringify([server,session]);
   async function api(path, options={}) {
@@ -44,12 +45,27 @@
     status.textContent=active?(labels[active.kind]||active.kind):'';
     status.title=active?'Prompt status; outcome not verified':'';
   }
-  function alertEvent(event) {
-    if(!interested(event)||Date.now()/1000-event.time>300)return;
-    if(prefs.inApp&&!document.hidden&&typeof notifyUser==='function')notifyUser(event.server+' / '+(event.session||event.provider)+': '+(labels[event.kind]||event.kind));
-    if(prefs.sound&&!document.hidden&&typeof playTone==='function')playTone(880,0.15,'sine',0.1);
+  const foreground=()=>!document.hidden&&document.hasFocus();
+  function foregroundCue() {
+    if(!prefs.foregroundCue||!foreground()||(typeof isDeafened!=='undefined'&&isDeafened))return;
+    // iPhone has no web vibration API; use a brief tone there instead.
+    try{if(navigator.vibrate?.(60))return;}catch{}
+    if(typeof playTone==='function')playTone(880,0.15,'sine',0.1);
+  }
+  async function deliverForeground(events) {
+    if(!foreground())return;
+    const fresh=events.filter(e=>interested(e)&&Date.now()/1000-e.time<=300);
+    if(!fresh.length)return;
+    // Receipt means the visible app handled the event, even when muted. Do not
+    // suppress pushes in the service worker: Safari requires a visible push.
+    const receipt=prefs.pushId?api('/api/activity/push/'+encodeURIComponent(prefs.pushId)+'/received',
+      {method:'POST',body:JSON.stringify({sequences:fresh.map(e=>e.seq)})}).catch(()=>{}):Promise.resolve();
+    foregroundCue();
+    await receipt;
   }
   async function poll() {
+    if(polling)return;
+    polling=true;clearTimeout(pollTimer);
     try {
       if(!initialized){
         const data=await api('/api/activity/snapshot');
@@ -59,7 +75,8 @@
       // Cursor is the last delivered event, never a separately-read high watermark.
       const data=await api('/api/activity?after='+cursor);
       if(!Array.isArray(data.events))throw new Error('Invalid activity page');
-      for(const event of data.events){remember(event);alertEvent(event);}
+      for(const event of data.events)remember(event);
+      await deliverForeground(data.events);
       cursor=data.next_cursor;
       if(data.history_gap){const snapshot=await api('/api/activity/snapshot');snapshot.sessions.forEach(remember);}
       decorate();
@@ -69,7 +86,7 @@
         if(event&&typeof enterServer==='function'){history.replaceState(null,'',location.pathname);await enterServer(event.server);connect(event.session);}
       }
     } catch { /* Transport status remains separate; never fabricate completion. */ }
-    setTimeout(poll,document.hidden?10000:2500);
+    polling=false;pollTimer=setTimeout(poll,document.hidden?10000:2500);
   }
   function message(text){dialog.querySelector('[data-message]').textContent=text;}
   async function pushRegistration(){
@@ -105,8 +122,8 @@
     if(!dialog){
       dialog=document.createElement('dialog');dialog.id='notification-settings';
       dialog.innerHTML=`<form method="dialog"><h2>Notifications</h2><p>Preferences for this browser or Home Screen app.</p>
-        <label><input type="checkbox" data-pref="inApp"> Show alerts while the gateway is open</label>
-        <label><input type="checkbox" data-pref="sound"> Play a sound while open</label>
+        <label><input type="checkbox" data-pref="foregroundCue"> Vibrate or play a tone while using the gateway</label>
+        <p>No banners while you’re using the app. Push notifications appear when it’s in the background or your phone is locked.</p>
         <fieldset><legend>Notify me when</legend>
         <label><input type="checkbox" data-kind="turn_finished"> A response finishes</label>
         <label><input type="checkbox" data-kind="waiting"> An agent needs input</label>
@@ -121,9 +138,8 @@
       dialog.querySelector('[data-disable]').onclick=disablePush;
       dialog.querySelector('[data-test]').onclick=async()=>{
         try{
-          if(prefs.pushId){await api('/api/activity/push/'+encodeURIComponent(prefs.pushId)+'/test',{method:'POST',body:'{}'});message('Test sent to this device.');}
-          else {if(typeof notifyUser==='function')notifyUser('Test notification');message('In-app test shown. Enable push to test background delivery.');}
-          if(prefs.sound&&typeof playTone==='function')playTone(880,0.15,'sine',0.1);
+          foregroundCue();
+          message(prefs.foregroundCue?'Foreground cue played. To test a push banner, lock your phone before an agent finishes.':'Foreground cue is off. Background push follows your push settings.');
         }catch(error){message(error.message);}
       };
       dialog.addEventListener('change',async()=>{
@@ -139,14 +155,19 @@
     const nodes=dialog.querySelector('[data-servers]');nodes.querySelectorAll('label').forEach(n=>n.remove());
     const names=new Set([...prefs.servers,...(typeof cachedServerList==='undefined'?[]:cachedServerList.map(s=>s.name))]);
     for(const name of names){const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.dataset.server=name;input.checked=prefs.servers.includes(name);label.append(input,document.createTextNode(' '+name));nodes.appendChild(label);}
-    message(prefs.pushId?'Push enabled on this device.':'Push is off. In-app alerts follow the settings above.');
+    message(prefs.pushId?'Background push enabled on this device.':'Background push is off.');
     dialog.showModal();
   }
   const style=document.createElement('style');
   style.textContent=`.activity-status{display:block;font-size:10px;line-height:14px;color:#aaa;font-weight:400}.activity-status:empty{display:none}.activity-status[data-kind="running"]{color:#d7b674}.activity-status[data-kind="waiting"]{color:#e6ae62}.activity-status[data-kind="turn_finished"]{color:#8fc697}.activity-status[data-kind="failed"]{color:#ef9c95}.activity-status.unread:before{content:'● ';color:#da7756}#active-prompt-status{font-size:11px;color:#aaa;margin-left:10px}#notification-settings{background:#292724;color:#eee;border:1px solid #57524a;border-radius:10px;padding:22px;max-width:min(440px,calc(100vw - 32px));max-height:85dvh;overflow:auto}#notification-settings::backdrop{background:#0009}#notification-settings h2{font-size:18px;margin-top:0}#notification-settings p{font-size:12px;line-height:1.5;color:#c5c0b8}#notification-settings label{display:block;padding:7px 0;font-size:13px}#notification-settings input{accent-color:#da7756}#notification-settings fieldset{margin:12px 0;border:1px solid #57524a;border-radius:5px}#notification-settings button{background:#444039;color:#eee;border:1px solid #6a6258;border-radius:5px;padding:8px 12px;cursor:pointer}.notification-actions{display:flex;flex-wrap:wrap;gap:8px}@media(max-width:600px){#active-prompt-status{display:none}}`;
   document.head.appendChild(style);
   window.bridgeActivity={settings,decorateItem};
-  document.addEventListener('visibilitychange',decorate);
-  window.addEventListener('focus',decorate);
+  // Unlock audio during interaction, not when a later network event arrives.
+  function primeAudio(){if(prefs.foregroundCue&&typeof ensureAudio==='function'){try{ensureAudio().resume().catch(()=>{});}catch{}}}
+  document.addEventListener('pointerdown',primeAudio,{passive:true});
+  document.addEventListener('keydown',primeAudio);
+  function visibilityChanged(){decorate();if(foreground())poll();}
+  document.addEventListener('visibilitychange',visibilityChanged);
+  window.addEventListener('focus',visibilityChanged);
   poll();
 })();
