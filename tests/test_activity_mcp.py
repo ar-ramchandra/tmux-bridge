@@ -27,7 +27,10 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(*streams) as client:
                     await client.initialize()
                     names={t.name for t in (await client.list_tools()).tools}
-                    self.assertEqual(names,{'list_sessions','get_prompt_status','get_events','wait_for_events'})
+                    self.assertEqual(names,{'list_sessions','get_prompt_status','get_events','wait_for_events','get_account_usage'})
+                    result=await client.call_tool('get_account_usage',{})
+                    self.assertFalse(result.is_error)
+                    self.assertEqual(json.loads(result.content[0].text),{'nodes':[]})
                     result=await client.call_tool('get_events',{'after_cursor':0})
                     self.assertFalse(result.is_error)
                     body=json.loads(result.content[0].text)

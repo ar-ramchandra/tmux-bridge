@@ -24,6 +24,7 @@ from pathlib import Path
 
 import websockets
 from activity import forward_activity, acknowledge_activity
+from account_usage import collect as collect_accounts, POLL_SECONDS
 from websockets.exceptions import ConnectionClosedError
 
 from protocol import (
@@ -84,6 +85,20 @@ _metrics = {
 }
 _has_gpu = False
 _session_metrics = {}
+_account_usage = {'collected_at': None, 'accounts': []}
+
+
+async def _collect_account_usage():
+    global _account_usage
+    loop = asyncio.get_running_loop()
+    # Provider probes cannot occupy PTY or system-metrics workers.
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix='bridge-account-usage') as worker:
+        while True:
+            try:
+                _account_usage = await loop.run_in_executor(worker, collect_accounts, CONFIG_DIR)
+            except Exception:
+                pass  # Preserve the last observation and its original age.
+            await asyncio.sleep(POLL_SECONDS)
 
 
 def _sample_metrics(previous=None):
@@ -561,6 +576,7 @@ def _rpc_metrics() -> dict:
         if b < 1024**2: return f"{b/1024:.1f} KB/s"
         return f"{b/1024**2:.1f} MB/s"
     result = {
+        'account_usage': _account_usage,
         "cpu": list(_metrics["cpu"]),
         "memory": list(_metrics["memory"]),
         "net_rx": list(_metrics["net_rx"]),
@@ -703,6 +719,7 @@ class ServerAgent:
     async def run(self):
         """Main entry point — starts metrics, session manager, and connects."""
         asyncio.create_task(_collect_metrics())
+        asyncio.create_task(_collect_account_usage())
         await self.manager.start()
 
         delay = RECONNECT_DELAY
@@ -892,6 +909,7 @@ class ServerAgent:
         prev_sessions = None
         while True:
             await asyncio.sleep(SESSION_POLL_INTERVAL)
+            await ws.send(json.dumps({'type': 'account_usage', 'snapshot': _account_usage}))
             sessions = self.manager.list_sessions()
             # Only send if changed
             if sessions != prev_sessions:

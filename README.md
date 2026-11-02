@@ -11,6 +11,7 @@ Each machine runs an agent that connects outward to your gateway. Open the brows
 ## Features
 
 - One session picker for multiple machines, with reconnecting agents.
+- Account quota remaining and reset times alongside machine resource usage; shared accounts are grouped across nodes. See [account usage](docs/account-usage.md).
 - Persistent terminal tabs, session history search, and explicit take/release input control.
 - Direct text selection, clipboard shortcuts, clickable HTTP(S) terminal links, and touch controls.
 - tmux sessions survive browser disconnects; the gateway does not replace tmux.

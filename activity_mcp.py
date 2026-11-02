@@ -8,6 +8,7 @@ from pathlib import Path
 import time
 
 from activity import ActivityStore, LABELS
+from account_usage import snapshots as account_snapshots
 
 
 class ActivityReader:
@@ -30,12 +31,22 @@ class ActivityReader:
                         for e in page['events'] if self.allowed(e)]
         return page
 
+    def accounts(self):
+        # Account quotas span a whole node. Session-only grants do not expose them.
+        return [node for node in account_snapshots(self.store)
+                if any(session=='*' and (server=='*' or server==node['server']) for server,session in self.scopes)]
+
 
 def build_server(reader):
     from mcp.server import MCPServer
     from mcp.types import ToolAnnotations
     mcp=MCPServer('Tmux Bridge activity',instructions='Read-only prompt lifecycle metadata. Response finished does not verify the user goal. Poll get_events using next_cursor; notifications do not automatically start an agent turn.')
     readonly=ToolAnnotations(readOnlyHint=True,destructiveHint=False,idempotentHint=True,openWorldHint=False)
+
+    @mcp.tool(annotations=readonly)
+    async def get_account_usage() -> dict:
+        """Read cached account quotas for NODE/* scopes. Quotas are shared across devices, not additive. Check stale/reset_passed; no credentials or full emails."""
+        return {'nodes': await asyncio.to_thread(reader.accounts)}
 
     @mcp.tool(annotations=readonly)
     async def list_sessions() -> dict:

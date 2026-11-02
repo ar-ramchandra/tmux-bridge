@@ -20,7 +20,7 @@ import urllib.request
 
 NAME_RE=re.compile(r'[a-z][a-z0-9-]{0,47}\Z')
 PAYLOAD=('server.py','protocol.py','auth.py','sysinfo.py','node_runtime.py',
-    'activity.py','integrations.py',
+    'activity.py','integrations.py','account_usage.py',
     'server.key','server.crt','ca.crt','tls.key','tls.crt','tls-ca.crt','access-token.json',
     'config.json','requirements-agent.txt','manifest.json')
 

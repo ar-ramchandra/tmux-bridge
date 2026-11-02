@@ -43,6 +43,7 @@ from protocol import (
 import cloudflare
 from browser_security import BrowserOriginMiddleware
 from activity_gateway import ActivityGateway
+from account_usage import ensure_table as ensure_usage_table, store_snapshot as store_account_usage, snapshots as account_snapshots
 
 app = FastAPI()
 app.add_middleware(BrowserOriginMiddleware)
@@ -53,6 +54,21 @@ LAYOUT_FILE = (Path(os.environ["TMUX_BRIDGE_CONFIG_DIR"]).expanduser() / "layout
 activity_gateway = ActivityGateway(Path(os.environ.get('TMUX_BRIDGE_ACTIVITY_DIR',
     str(Path(os.environ.get('TMUX_BRIDGE_CONFIG_DIR',str(Path.home()/'.config/tmux-bridge')))/'activity'))))
 app.include_router(activity_gateway.router())
+ensure_usage_table(activity_gateway.store)
+
+
+@app.get('/api/account-usage')
+async def account_usage_snapshot():
+    nodes = await asyncio.to_thread(account_snapshots, activity_gateway.store)
+    for node in nodes:
+        node['connected'] = node['server'] in gw_manager.server_connections
+    return {'nodes': nodes}
+
+
+@app.get('/accounts.js')
+async def account_usage_script():
+    from fastapi.responses import Response
+    return Response((Path(__file__).parent/'tmux_bridge_assets/accounts.js').read_text(), media_type='application/javascript')
 
 
 def load_layout() -> dict:
@@ -726,6 +742,14 @@ async def server_ws(websocket: WebSocket):
                     conn.resolve_rpc(msg["id"], msg["status"], msg["body"])
                 elif msg_type == MSG_SESSION_UPDATE:
                     conn.sessions = msg.get("sessions", [])
+                elif msg_type == 'account_usage':
+                    if not getattr(conn, '_usage_task', None) or conn._usage_task.done():
+                        async def accept_usage(snapshot, identity=server_name):
+                            try:
+                                await asyncio.to_thread(store_account_usage, activity_gateway.store, identity, snapshot)
+                            except (ValueError, TypeError, KeyError, AttributeError):
+                                pass
+                        conn._usage_task = asyncio.create_task(accept_usage(msg.get('snapshot')))
                 elif msg_type == 'activity_events':
                     # One bounded metadata job per connection. Never hold the
                     # terminal receive loop on SQLite or notification work.
@@ -2823,6 +2847,7 @@ function updateRightPanel() {
     }
 
     // Session charts
+    window.bridgeAccounts?.render();
     const sessBody = document.getElementById('acc-sess');
     if (sessBody && !sessBody.classList.contains('collapsed')) {
       Object.keys(m.sessions || {}).forEach(name => {
@@ -4461,6 +4486,7 @@ setInterval(() => { if (onServer && currentServer) loadSessions(); }, 15000);
 
 </script>
 <script src="/activity.js"></script>
+<script src="/accounts.js"></script>
 </body>
 </html>"""
 
