@@ -24,7 +24,7 @@ from pathlib import Path
 
 import websockets
 from activity import forward_activity, acknowledge_activity
-from account_usage import collect as collect_accounts, POLL_SECONDS
+from account_usage import collect as collect_accounts, sanitized_snapshot, POLL_SECONDS
 from websockets.exceptions import ConnectionClosedError
 
 from protocol import (
@@ -95,7 +95,7 @@ async def _collect_account_usage():
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix='bridge-account-usage') as worker:
         while True:
             try:
-                _account_usage = await loop.run_in_executor(worker, collect_accounts, CONFIG_DIR)
+                _account_usage = sanitized_snapshot(await loop.run_in_executor(worker, collect_accounts, CONFIG_DIR))
             except Exception:
                 pass  # Preserve the last observation and its original age.
             await asyncio.sleep(POLL_SECONDS)

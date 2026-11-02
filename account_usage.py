@@ -219,7 +219,7 @@ def collect(root):
                 accounts.append({**identity('claude', auth), 'status': status, 'windows': [], 'observed_at': None})
             except Exception:
                 accounts.append({'provider': 'claude', 'label': 'Claude', 'status': 'unavailable', 'windows': [], 'observed_at': None})
-    return {'collected_at': time.time(), 'accounts': accounts}
+    return {'collected_at': time.time(), 'accounts': accounts[:64]}
 
 
 def sanitized_snapshot(raw):
