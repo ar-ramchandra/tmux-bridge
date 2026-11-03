@@ -22,7 +22,8 @@ const script=fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/accounts
   await page.goto('https://usage.test/',{waitUntil:'networkidle'});
   await page.locator('#terminal').focus();
   assert.equal(await page.locator('.usage-account').count(),2);
-  assert.match(await page.locator('#account-usage').textContent(),/67% remaining/);
+  assert.equal(await page.locator('#rp-content > :first-child').getAttribute('id'),'account-usage');
+  assert.equal(await page.getByRole('meter',{name:'Weekly remaining',exact:true}).getAttribute('aria-valuenow'),'67');
   assert.match(await page.locator('#account-usage').textContent(),/studio, hpc · shared allowance/);
   assert.match(await page.locator('#account-usage').textContent(),/Awaiting refreshed limit/);
   assert.match(await page.locator('#account-usage').textContent(),/Stale/);
@@ -35,7 +36,7 @@ const script=fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/accounts
   assert.equal(await page.evaluate(()=>document.activeElement.id),'terminal');
   await page.evaluate(()=>{currentServer='hpc';bridgeAccounts.render();});
   assert.equal(await page.locator('.usage-account').count(),1);
-  assert.match(await page.locator('#account-usage').textContent(),/67% remaining/);
+  assert.equal(await page.getByRole('meter',{name:'Weekly remaining',exact:true}).getAttribute('aria-valuenow'),'67');
   await page.locator('.usage-login summary').click();
   await page.evaluate(()=>bridgeAccounts.render());
   assert.equal(await page.locator('.usage-login').getAttribute('open'),'');
