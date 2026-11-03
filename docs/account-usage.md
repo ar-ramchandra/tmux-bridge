@@ -6,10 +6,10 @@ and the age of the observation. If the same identified account is reported by
 several machines, its newest observation is shown once with the machines listed.
 Percentages are never added across machines.
 
-Each reported limit has its own doughnut: for example **5 hours** and **Weekly**.
-The center shows the percentage remaining, with the reset time alongside it.
+Each reported limit has a compact horizontal bar: for example **5 hours** and **Weekly**.
+The label shows the percentage remaining, with the reset countdown below it.
 The provider determines which windows exist. Missing windows are not invented;
-expired readings have no ring and stale readings are muted and labelled.
+expired readings have no filled bar and stale readings are muted and labelled.
 
 ## Remote sign-in
 
