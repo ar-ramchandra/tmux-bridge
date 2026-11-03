@@ -649,6 +649,13 @@ async def proxy_kill_session(server: str, name: str):
     return await _rpc_to_server(server, "DELETE", f"/api/sessions/{name}")
 
 
+@app.post("/api/{server}/account-login/{provider}")
+async def proxy_account_login(server: str, provider: str):
+    if provider not in ('claude', 'codex'):
+        return JSONResponse({'error': 'Unsupported sign-in provider'}, status_code=400)
+    return await _rpc_to_server(server, 'POST', '/api/account-login', {'provider': provider})
+
+
 @app.get("/api/{server}/specs")
 async def proxy_specs(server: str):
     return await _rpc_to_server(server, "GET", "/api/specs")

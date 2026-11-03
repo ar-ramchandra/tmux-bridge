@@ -24,7 +24,7 @@ from pathlib import Path
 
 import websockets
 from activity import forward_activity, acknowledge_activity
-from account_usage import collect as collect_accounts, sanitized_snapshot, POLL_SECONDS
+from account_usage import collect as collect_accounts, sanitized_snapshot, POLL_SECONDS, start_login
 from websockets.exceptions import ConnectionClosedError
 
 from protocol import (
@@ -715,6 +715,7 @@ class ServerAgent:
         self.manager = SessionManager(self._channel_exited)
         self.ws = None
         self._running = True
+        self._login_rpc_task = None
 
     async def run(self):
         """Main entry point — starts metrics, session manager, and connects."""
@@ -813,7 +814,13 @@ class ServerAgent:
                 elif msg_type == MSG_RESIZE:
                     self._handle_resize(msg)
                 elif msg_type == MSG_RPC_REQUEST:
-                    await self._handle_rpc(ws, msg)
+                    if msg.get('path') == '/api/account-login':
+                        if self._login_rpc_task and not self._login_rpc_task.done():
+                            await ws.send(make_rpc_response(msg['id'], 409, {'error': 'A login terminal is opening; retry shortly'}))
+                        else:
+                            self._login_rpc_task = asyncio.create_task(self._handle_login_rpc(ws, msg))
+                    else:
+                        await self._handle_rpc(ws, msg)
                 elif msg_type == MSG_PING:
                     await ws.send(make_pong())
                 elif msg_type == 'activity_ack':
@@ -824,6 +831,13 @@ class ServerAgent:
                             except Exception:
                                 pass  # Safe to replay; gateway deduplicates.
                         self._activity_ack_task=asyncio.create_task(save_activity_ack(msg.get('ids')))
+
+    async def _handle_login_rpc(self, ws, msg):
+        # Starting tmux must not delay input or heartbeat frames on this socket.
+        try:
+            await self._handle_rpc(ws, msg)
+        except Exception:
+            pass  # A disconnected browser can reopen the same dedicated session.
 
     async def _handle_connect(self, ws, msg: dict):
         channel = msg["channel"]
@@ -884,6 +898,8 @@ class ServerAgent:
             result = await asyncio.get_running_loop().run_in_executor(None, _rpc_scroll, body or {})
         elif path == "/api/history/live" and method == "POST":
             result = await asyncio.get_running_loop().run_in_executor(None, _rpc_history, body or {}, True)
+        elif path == "/api/account-login" and method == "POST":
+            result = await asyncio.to_thread(start_login, (body or {}).get('provider'))
         elif path.startswith("/api/sessions/") and method == "POST":
             name = path.split("/")[-1]
             result = _rpc_create_session(name, body)

@@ -13,6 +13,19 @@ import gateway
 
 
 class SessionLaunchTests(unittest.TestCase):
+    def test_account_login_is_explicit_same_origin_and_allowlisted(self):
+        rpc = AsyncMock(return_value=JSONResponse({'ok': True, 'session': 'bridge-signin-claude'}))
+        with patch.object(gateway, '_rpc_to_server', rpc):
+            client = TestClient(gateway.app)
+            self.assertEqual(client.get('/api/hpc/account-login/claude').status_code, 405)
+            self.assertEqual(client.post('/api/hpc/account-login/claude', headers={'Origin': 'https://foreign.example'}).status_code, 403)
+            self.assertEqual(client.post('/api/hpc/account-login/sh').status_code, 400)
+            rpc.assert_not_called()
+            result = client.post('/api/hpc/account-login/claude', headers={'Origin': 'http://testserver'})
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual(result.headers['cache-control'], 'no-store')
+            rpc.assert_awaited_once_with('hpc', 'POST', '/api/account-login', {'provider': 'claude'})
+
     def test_existing_clients_get_login_launcher(self):
         rpc = AsyncMock(return_value=JSONResponse({'ok': True, 'created': True}))
         with patch.object(gateway, '_rpc_to_server', rpc):

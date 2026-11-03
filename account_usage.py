@@ -1,4 +1,4 @@
-"""Read-only provider quotas. Never read credential files or retain raw responses."""
+"""Provider quotas and explicit CLI sign-in. Never read credential files."""
 from __future__ import annotations
 
 import argparse
@@ -11,6 +11,7 @@ import selectors
 import shlex
 import shutil
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -342,12 +343,70 @@ def record_statusline(root, raw):
                 pass
 
 
+LOGIN_ARGS = {'claude': ['auth', 'login'], 'codex': ['login', '--device-auth']}
+
+
+def start_login(provider):
+    """Start or reopen one isolated login terminal; never type into user work."""
+    if not isinstance(provider, str) or provider not in LOGIN_ARGS:
+        return {'status': 400, 'body': {'error': 'Unsupported sign-in provider'}}
+    if not find_cli(provider):
+        return {'status': 409, 'body': {'error': provider.title() + ' CLI is not installed on this device'}}
+    session = 'bridge-signin-' + provider
+    target = '=' + session
+    def tmux(*args):
+        return subprocess.run(['tmux', *args], capture_output=True, text=True, timeout=5)
+    try:
+        exists = tmux('has-session', '-t', target).returncode == 0
+        if exists:
+            marker = tmux('show-options', '-v', '-t', session, '@bridge-signin').stdout.strip()
+            if marker != provider:
+                return {'status': 409, 'body': {'error': 'Session name is already in use: ' + session}}
+        else:
+            command = shlex.join([sys.executable, str(Path(__file__).absolute()), 'login', provider])
+            result = tmux('new-session', '-d', '-s', session, '-c', str(Path.home()), '-x', '100', '-y', '30', command)
+            if result.returncode:
+                return {'status': 409, 'body': {'error': 'Could not start login; try again'}}
+            tmux('set-option', '-t', session, '@bridge-signin', provider)
+        return {'status': 200, 'body': {'ok': True, 'session': session, 'created': not exists}}
+    except (OSError, subprocess.TimeoutExpired):
+        return {'status': 503, 'body': {'error': 'Login terminal is unavailable; try again'}}
+
+
+def run_login(provider):
+    executable = find_cli(provider)
+    print(provider.title() + ' sign-in on ' + socket.gethostname(), flush=True)
+    print('This changes the default CLI account for this device’s user.\n'
+          'Open the provider link below on your phone or browser.\n'
+          'Claude: paste the returned code here if asked.\n'
+          'Codex: enter the displayed device code on the provider page.\n'
+          'Credentials are saved by the CLI on this device.\n', flush=True)
+    try:
+        if not executable:
+            print('CLI is no longer installed.')
+        else:
+            env = cli_env(executable)
+            # The operator is remote; do not open a browser on the node itself.
+            env['BROWSER'] = 'true'
+            status = subprocess.call([executable, *LOGIN_ARGS[provider]], env=env, cwd=Path.home())
+            print('\nSign-in completed.' if status == 0 else '\nSign-in did not complete (exit ' + str(status) + ').')
+            print('Account readings refresh within five minutes. Existing agents may need to reload their login.')
+        input('Press Enter to close this login session, then return to your work. ')
+    except (KeyboardInterrupt, EOFError):
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--agent-dir', type=Path, default=Path.home()/'.tmux-bridge')
-    parser.add_argument('action', choices=['install-claude', 'claude-statusline', 'collect'])
+    parser.add_argument('action', choices=['install-claude', 'claude-statusline', 'collect', 'login'])
+    parser.add_argument('provider', nargs='?', choices=list(LOGIN_ARGS))
     args = parser.parse_args()
-    if args.action == 'install-claude':
+    if args.action == 'login':
+        if not args.provider:
+            parser.error('login requires a provider')
+        run_login(args.provider)
+    elif args.action == 'install-claude':
         print(install_statusline(args.agent_dir))
     elif args.action == 'claude-statusline':
         raw = sys.stdin.buffer.read(1024*1024+1)

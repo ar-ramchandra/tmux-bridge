@@ -6,6 +6,43 @@ and the age of the observation. If the same identified account is reported by
 several machines, its newest observation is shown once with the machines listed.
 Percentages are never added across machines.
 
+Each reported limit has its own doughnut: for example **5 hours** and **Weekly**.
+The center shows the percentage remaining, with the reset time alongside it.
+The provider determines which windows exist. Missing windows are not invented;
+expired readings have no ring and stale readings are muted and labelled.
+
+## Remote sign-in
+
+Open **Stats → AI accounts → Sign in on this device**, then choose Claude Code
+or Codex. The gateway opens a separate `bridge-signin-PROVIDER` terminal on the
+selected node without sending input to your existing work. Repeated clicks reopen
+the same login terminal. After completion, press Enter to close it and return to
+your work. Cancel with Ctrl+C or delete that login session using the normal session
+controls. Account readings refresh within five minutes.
+
+- Claude runs `claude auth login`. Open its printed link on your phone/computer,
+  complete the provider's sign-in, and paste the returned code into the login
+  terminal if asked.
+- Codex runs `codex login --device-auth`. Open the printed link in your browser
+  and enter the displayed code there. Device-code login must be enabled in your
+  ChatGPT security settings or workspace permissions.
+
+Provider sign-in uses a separate browser page, not an iframe or a remote desktop.
+The gateway does not proxy provider login pages, read their cookies, or implement
+its own OAuth exchange. The provider CLI stores credentials on the selected node.
+The login terminal uses the same protected transport and shared-operator access
+as other terminals; its link and one-time code are visible to trusted gateway
+operators. Do not share login terminal screenshots or codes.
+
+This signs in the node agent user's **default CLI account**, which can affect
+other CLI sessions using that account. Existing agents may need to reload their
+login. It does not authenticate every custom profile, container, or Unix user.
+No running conversation is restarted automatically. Login is an explicit browser
+action, not an MCP tool. Missing CLIs and disconnected nodes report an error.
+
+References: [Claude remote/manual authentication](https://code.claude.com/docs/en/authentication)
+and [Codex device-code sign-in](https://learn.chatgpt.com/docs/auth#login-on-headless-devices).
+
 ## Data sources
 
 - Codex: read-only `account/read` and `account/rateLimits/read` requests through a
