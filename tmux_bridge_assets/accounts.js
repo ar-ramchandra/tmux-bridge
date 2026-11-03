@@ -36,13 +36,19 @@
     }
     details.append(actions,status);return details;
   }
-  function quotaBar(value,label,stale){
-    const bar=element('div','usage-bar'+(stale?' usage-stale':''));
-    bar.style.setProperty('--remaining',value+'%');
-    bar.style.setProperty('--quota-color',stale?'#9a9996':value<=10?'#e69a81':value<=25?'#dfbc79':'#8fc697');
-    bar.setAttribute('role','meter');bar.setAttribute('aria-label',label+' remaining'+(stale?' (last reported)':''));
-    bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');bar.setAttribute('aria-valuenow',String(value));
-    return bar;
+  function quotaRing(value,label,stale){
+    const ring=element('div','usage-ring'+(stale?' usage-stale':''));
+    ring.setAttribute('role','meter');ring.setAttribute('aria-label',label+' remaining'+(stale?' (last reported)':''));
+    ring.setAttribute('aria-valuemin','0');ring.setAttribute('aria-valuemax','100');ring.setAttribute('aria-valuenow',String(value));
+    const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 52 52');svg.setAttribute('aria-hidden','true');
+    const circumference=2*Math.PI*21;
+    for(const foreground of [false,true]){
+      const circle=document.createElementNS(ns,'circle');
+      for(const [key,v] of Object.entries({cx:26,cy:26,r:21,fill:'none','stroke-width':5,stroke:foreground?(stale?'#9a9996':value<=10?'#e69a81':value<=25?'#dfbc79':'#8fc697'):'#2b2a27'}))circle.setAttribute(key,String(v));
+      if(foreground){circle.setAttribute('stroke-dasharray',String(circumference));circle.setAttribute('stroke-dashoffset',String(circumference*(1-value/100)));circle.setAttribute('stroke-linecap','round');if(value===0)circle.setAttribute('visibility','hidden');}
+      svg.append(circle);
+    }
+    ring.append(svg,element('span','usage-ring-center',value.toFixed(value%1?1:0)+'%'));return ring;
   }
   function groups(){
     const all=new Map();
@@ -70,43 +76,31 @@
     const accounts=groups();
     if(!accounts.length)content.append(element('p','usage-note','Waiting for this machine’s account information.'));
     for(const [index,{account:a,devices,connected}] of accounts.entries()){
-      const card=element('div','usage-account '+(a.provider==='codex'?'usage-codex':'usage-claude'));
-      const header=element('div','usage-card-heading'),mark=element('span','usage-provider-mark',a.provider==='codex'?'›_':'✳');mark.setAttribute('aria-hidden','true');
-      header.append(mark,element('strong','usage-title',a.provider==='codex'?'Codex':'Claude'));
-      if(a.plan)header.append(element('span','usage-plan',a.plan));
-      card.append(header,element('div','usage-identity',a.account_key?a.label:'Account unknown'));
+      const card=element('div','usage-account');
+      const provider=a.provider==='codex'?'Codex':'Claude';
       const stale=a.stale||!connected||!a.observed_at||Date.now()/1000-a.observed_at>900;
-      const windows=element('div','usage-windows');
-      for(const w of a.windows||[]){
-        const expired=w.reset_passed||(w.resets_at&&w.resets_at<=Date.now()/1000);
-        const row=element('div','usage-window');
-        const remaining=Number(w.remaining_percent);
-        const valid=Number.isFinite(remaining)&&remaining>=0&&remaining<=100&&w.remaining_percent!==null;
-        row.append(element('div','usage-caption',w.label));
-        row.append(element('strong','usage-value',!expired&&valid?remaining.toFixed(remaining%1?1:0)+'%':'—'));
-        if(!expired&&valid)row.append(quotaBar(remaining,w.label,stale));
-        else {const unknown=element('div','usage-bar-unknown');unknown.setAttribute('aria-hidden','true');row.append(unknown);}
-        if(expired||!valid)row.append(element('div','usage-note',expired?'Awaiting refreshed limit':'Unavailable'));
-        else if(w.resets_at){
-          const reset=element('div','usage-reset','↻ '+resetLabel(w.resets_at));
-          reset.title='Resets '+new Date(w.resets_at*1000).toLocaleString();reset.setAttribute('aria-label',reset.title);row.append(reset);
-        }
-        windows.append(row);
+      const limits=a.windows?.length?a.windows:[null];
+      for(const [windowIndex,w] of limits.entries()){
+        const expired=w&&(w.reset_passed||(w.resets_at&&w.resets_at<=Date.now()/1000));
+        const remaining=w?Number(w.remaining_percent):NaN;
+        const valid=w&&Number.isFinite(remaining)&&remaining>=0&&remaining<=100&&w.remaining_percent!==null;
+        const tile=element('div','usage-window');
+        if(!expired&&valid)tile.append(quotaRing(remaining,w.label,stale));
+        else {const unknown=element('div','usage-ring-unknown','—');unknown.setAttribute('aria-hidden','true');tile.append(unknown);}
+        const details=element('details','usage-details');details.dataset.account=currentServer+':'+a.provider+':'+(a.account_key||index)+':'+windowIndex;
+        const summary=element('summary');summary.append(element('span','usage-provider',provider),element('span','usage-caption',w?w.label:'Account'));details.append(summary);
+        details.append(element('div','usage-note',(a.account_key?a.label:'Account identity unavailable')+(a.plan?' · '+a.plan:'')));
+        details.append(element('div','usage-note','Used on '+[...devices].join(', ')+(devices.size>1?' · shared allowance':'')));
+        if(!a.account_key)details.append(element('div','usage-note','Not combined with other devices.'));
+        if(a.status!=='ok')details.append(element('div','usage-note',explanations[a.status]||explanations.unavailable));
+        details.append(element('div','usage-note',(stale?'Last reported allowance · ':'')+age(a.observed_at)));
+        if(w?.resets_at)details.append(element('div','usage-note','Reset '+new Date(w.resets_at*1000).toLocaleString()));
+        tile.append(details);
+        if(expired||!valid)tile.append(element('div','usage-note',expired?'Awaiting refreshed limit':({signed_out:'Signed out',awaiting_report:'Waiting for usage'})[a.status]||'Usage unavailable'));
+        else if(w.resets_at){const reset=element('div','usage-reset','↻ '+resetLabel(w.resets_at));reset.title='Resets '+new Date(w.resets_at*1000).toLocaleString();reset.setAttribute('aria-label',reset.title);tile.append(reset);}
+        if(stale)tile.append(element('div','usage-stale-label','Stale'));
+        card.append(tile);
       }
-      if(windows.children.length)card.append(windows);
-      else {
-        const empty=element('div','usage-empty'),symbol=element('span','usage-empty-symbol','◌');symbol.setAttribute('aria-hidden','true');
-        empty.append(symbol,element('span','',({signed_out:'Signed out',unsupported:'No quota available',awaiting_report:'Waiting for usage',unavailable:'Usage unavailable'})[a.status]||'Waiting for usage'));card.append(empty);
-      }
-      const details=element('details','usage-details');details.dataset.account=currentServer+':'+a.provider+':'+(a.account_key||index);
-      const summary=element('summary'),dot=element('span','usage-freshness'+(stale?' usage-old':''));dot.setAttribute('aria-hidden','true');
-      summary.append(dot,element('span','',stale?'Stale · '+age(a.observed_at):age(a.observed_at)),element('span','usage-device-count',devices.size>1?devices.size+' devices':'1 device'));details.append(summary);
-      details.append(element('div','usage-note','Used on '+[...devices].join(', ')+(devices.size>1?' · shared allowance':'')));
-      if(!a.account_key)details.append(element('div','usage-note','Account identity unavailable; not combined with other devices.'));
-      if(a.status!=='ok')details.append(element('div','usage-note',explanations[a.status]||explanations.unavailable));
-      if(stale)details.append(element('div','usage-note','Last reported allowance; a fresh reading is not available.'));
-      for(const w of a.windows||[])if(w.resets_at)details.append(element('div','usage-note',w.label+' · Reset '+new Date(w.resets_at*1000).toLocaleString()));
-      card.append(details);
       content.append(card);
     }
     // Avoid unnecessary DOM changes while a user is selecting account text.
@@ -123,20 +117,15 @@
     setTimeout(poll,document.hidden?30000:10000);
   }
   const style=element('style');style.textContent=`
-    .account-usage{padding:12px 8px 4px;border-bottom:1px solid #444039;margin-bottom:10px}.account-usage h3{font-size:12px;margin:0 2px 12px;color:#d4cfc4;letter-spacing:.03em}
-    .usage-account{--provider:#a7c9ae;padding:8px 10px 0;margin-bottom:8px;border:1px solid #42483e;border-radius:9px;background:linear-gradient(135deg,#2c342d,#22231f 65%);overflow:hidden}
-    .usage-claude{--provider:#e4ac89;border-color:#514036;background:linear-gradient(135deg,#3b2e28,#26221f 65%)}
-    .usage-card-heading{display:flex;align-items:center;gap:7px;min-width:0}.usage-provider-mark{color:var(--provider);font-size:20px;line-height:1;font-weight:700}
-    .usage-title{font-size:13px;color:#f1ede4}.usage-plan{margin-left:auto;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;border:1px solid #625b4d;border-radius:12px;padding:2px 6px;color:#ddd2c1}
-    .usage-identity{font-size:10px;color:#b9b4aa;margin:4px 0 9px;overflow-wrap:anywhere}.usage-note{font-size:11px;color:#b6b0a5;line-height:1.5;overflow-wrap:anywhere}
-    .usage-windows{display:grid;gap:12px;padding:2px 0 10px}.usage-window{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:5px;min-width:0}
-    .usage-caption{font-size:11px;font-weight:600;color:#ddd6c9;overflow-wrap:anywhere}.usage-value{font-size:12px;font-variant-numeric:tabular-nums;color:#eee7da}.usage-window>.usage-note{grid-column:1/-1}
-    .usage-bar{grid-column:1/-1;width:100%;height:6px;border-radius:3px;background:linear-gradient(to right,var(--quota-color) var(--remaining),#46423b 0)}
-    .usage-bar-unknown{grid-column:1/-1;height:4px;border:1px dashed #736658;border-radius:3px}
-    .usage-reset{grid-column:1/-1;text-align:right;font-size:10px;color:#c2b8a5;font-variant-numeric:tabular-nums}
-    .usage-stale{opacity:.6}.usage-empty{display:flex;align-items:center;gap:10px;font-size:11px;color:#c9beac;padding:0 0 12px}.usage-empty-symbol{font-size:32px;color:var(--provider)}
-    .usage-details{border-top:1px solid #ffffff12;padding:0 0 2px}.usage-details summary{display:flex;align-items:center;gap:5px;cursor:pointer;min-height:34px;font-size:9px;color:#b9b2a4;list-style:none}.usage-details summary::-webkit-details-marker{display:none}.usage-device-count{margin-left:auto;white-space:nowrap}.usage-device-count:after{content:' ⌄'}.usage-details[open] .usage-device-count:after{content:' ⌃'}.usage-details .usage-note{margin:0 0 8px}
-    .usage-freshness{width:5px;height:5px;background:#93ba97;border-radius:50%;flex-shrink:0}.usage-freshness.usage-old{background:#d1ad71}
+    .account-usage{padding:12px 10px 4px;border-bottom:1px solid #444039;margin-bottom:10px}.account-usage h3{font-size:12px;margin:0 0 10px;color:#d4cfc4;letter-spacing:.03em}
+    #account-usage-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:8px}.usage-account{display:contents}
+    .usage-window{background:#1a1915;border-radius:8px;padding:10px 6px;display:flex;flex-direction:column;align-items:center;gap:5px;min-width:0;text-align:center}
+    .usage-ring{position:relative;width:52px;height:52px;flex:0 0 52px}.usage-ring svg{width:52px;height:52px;transform:rotate(-90deg)}
+    .usage-ring-center{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:monospace;color:#e8e4db}
+    .usage-ring-unknown{width:42px;height:42px;margin:5px;border:2px dashed #736658;box-sizing:border-box;border-radius:50%;display:grid;place-items:center;font-size:16px;color:#b9a78c}
+    .usage-provider{display:block;color:#c9c1b3;font-size:10px;font-weight:700}.usage-caption{display:block;font-size:9px;font-weight:600;color:#a9a192;overflow-wrap:anywhere;margin-top:2px}
+    .usage-note{font-size:10px;color:#b6b0a5;line-height:1.4;overflow-wrap:anywhere}.usage-reset{font-size:9px;color:#a9a192;font-variant-numeric:tabular-nums}.usage-stale-label{font-size:9px;color:#d1ad71}.usage-stale{opacity:.6}
+    .usage-details{width:100%}.usage-details summary{cursor:pointer;list-style:none}.usage-details summary::-webkit-details-marker{display:none}.usage-details[open] .usage-note{margin-top:6px}
     .usage-login{margin:0 2px 8px}.usage-login summary{cursor:pointer;font-size:11px;padding:6px 0;color:#d6c8b7}
     .usage-login-actions{display:flex;gap:8px}.usage-login button{min-height:40px;padding:7px 12px;border:1px solid #625d53;border-radius:6px;background:#302e29;color:#eee;cursor:pointer}
     .usage-login button:disabled{opacity:.5;cursor:wait}.usage-login button:focus-visible,.usage-login summary:focus-visible,.usage-details summary:focus-visible{outline:2px solid #dfbc79;outline-offset:1px}

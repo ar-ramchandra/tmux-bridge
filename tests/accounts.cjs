@@ -51,6 +51,6 @@ const script=fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/accounts
   await page.getByRole('status').filter({hasText:'CLI is not installed'}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Codex',exact:true}).isEnabled(),true);
   assert.deepEqual(errors,[]);
-  console.log('PASS account quota bars, grouping, stale resets, escaping, node switching, draft focus and isolated remote login/error recovery');
+  console.log('PASS compact account doughnuts, grouping, stale resets, escaping, node switching, draft focus and isolated remote login/error recovery');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
