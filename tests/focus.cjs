@@ -9,6 +9,7 @@ const html=fs.readFileSync(path.join(__dirname,'../gateway.py'),'utf8').split('H
   const page=await browser.newPage({viewport:{width:1280,height:800}});
   await page.route('**/*',r=>{
    const u=r.request().url();if(u.startsWith('https://cdn.jsdelivr.net/'))return r.continue();
+   if(u.endsWith('/desktop.js'))return r.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/desktop.js'),'utf8')});
    return r.fulfill({contentType:u==='https://inspection.test/'?'text/html':'application/json',body:u==='https://inspection.test/'?html:u.includes('/layout')?'{}':'[]'});
   });
   await page.addInitScript(()=>{

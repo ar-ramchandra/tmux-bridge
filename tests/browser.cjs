@@ -13,6 +13,7 @@ const passed=[];
    const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.route('**/*',async r=>{
     const u=r.request().url();
+   if(u.endsWith('/desktop.js'))return r.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/desktop.js'),'utf8')});
     if(u.startsWith('https://cdn.jsdelivr.net/'))return r.continue();
     if(u==='https://inspection.test/')return r.fulfill({contentType:'text/html',body:html});
     let data=[];

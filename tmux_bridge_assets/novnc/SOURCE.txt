@@ -1,0 +1,5 @@
+@novnc/novnc 1.7.0
+https://github.com/novnc/noVNC
+https://registry.npmjs.org/@novnc/novnc/-/novnc-1.7.0.tgz
+sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA==
+Unmodified upstream source. See docs/LICENSE.MPL-2.0 and vendor/pako/LICENSE.

@@ -11,6 +11,7 @@ const transcript='Select this sentence and copy it.\nhttps://example.com/path?q=
   let holdHistory=false,releaseHistory;
   await context.route('**/*',async r=>{
    const url=r.request().url();
+   if(url.endsWith('/desktop.js'))return r.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/desktop.js'),'utf8')});
    if(url.startsWith('https://cdn.jsdelivr.net/'))return r.continue();
    if(url==='https://inspection.test/')return r.fulfill({contentType:'text/html',body:html});
    if(url.includes('/history/')&&holdHistory)await new Promise(resolve=>releaseHistory=resolve);

@@ -14,6 +14,7 @@ Each machine runs an agent that connects outward to your gateway. Open the brows
 - Account quota remaining and reset times alongside machine resource usage; shared accounts are grouped across nodes. See [account usage](docs/account-usage.md).
 - Persistent terminal tabs, session history search, and explicit take/release input control.
 - Direct text selection, clipboard shortcuts, clickable HTTP(S) terminal links, and touch controls.
+- Optional browser desktop control on phones, tablets, and computers using an existing local VNC service. See [remote desktop](docs/remote-desktop.md).
 - tmux sessions survive browser disconnects; the gateway does not replace tmux.
 - One-time node enrollment with signed application credentials.
 - Optional private-CA mTLS transport and per-node Cloudflare installer bundles for an explicitly configured deployment.

@@ -10,6 +10,7 @@ const html=fs.readFileSync(path.join(__dirname,'../gateway.py'),'utf8').split('H
   page.on('pageerror',e=>errors.push(e.message));
   await page.route('**/*',r=>{
    const u=r.request().url();
+   if(u.endsWith('/desktop.js'))return r.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/desktop.js'),'utf8')});
    if(u.startsWith('https://cdn.jsdelivr.net/'))return r.continue();
    return r.fulfill({contentType:u==='https://inspection.test/'?'text/html':'application/json',body:u==='https://inspection.test/'?html:u.includes('/layout')?'{}':'[]'});
   });

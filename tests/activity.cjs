@@ -15,6 +15,7 @@ const script=fs.readFileSync(path.join(root,'tmux_bridge_assets/activity.js'),'u
    const url=new URL(route.request().url());
    if(url.hostname==='cdn.jsdelivr.net')return route.continue();
    if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:html});
+   if(url.pathname==='/desktop.js')return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/desktop.js'),'utf8')});
    if(url.pathname==='/activity.js')return route.fulfill({contentType:'application/javascript',body:script});
    let data=[];
    if(url.pathname.endsWith('/received')){receipts.push(JSON.parse(route.request().postData()));data={ok:true};}

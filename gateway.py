@@ -43,6 +43,7 @@ from protocol import (
 import cloudflare
 from browser_security import BrowserOriginMiddleware
 from activity_gateway import ActivityGateway
+from desktop_gateway import DesktopGateway
 from account_usage import ensure_table as ensure_usage_table, store_snapshot as store_account_usage, snapshots as account_snapshots
 
 app = FastAPI()
@@ -402,6 +403,7 @@ class GatewayManager:
                 ps.notify_server_disconnected()
 
     async def unregister_server(self, server_name: str):
+        await desktop_gateway.close_node(server_name)
         conn = self.server_connections.pop(server_name, None)
         if conn:
             conn._active = False
@@ -478,6 +480,8 @@ class GatewayManager:
 
 
 gw_manager = GatewayManager()
+desktop_gateway = DesktopGateway(gw_manager.get_server)
+app.include_router(desktop_gateway.router)
 
 
 @app.on_event("startup")
@@ -717,6 +721,9 @@ async def server_ws(websocket: WebSocket):
         # Wait for register message
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=10)
         msg = json.loads(raw)
+        if msg.get('type') == 'desktop':
+            await desktop_gateway.accept_agent(websocket, server_name, msg.get('ticket'))
+            return
         if msg.get("type") != MSG_REGISTER:
             await websocket.close()
             return
@@ -4495,6 +4502,7 @@ setInterval(() => { if (onServer && currentServer) loadSessions(); }, 15000);
 </script>
 <script src="/activity.js"></script>
 <script src="/accounts.js"></script>
+<script type="module" src="/desktop.js"></script>
 </body>
 </html>"""
 
