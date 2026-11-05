@@ -3333,6 +3333,7 @@ document.querySelector('#history-modal .dialog-actions').addEventListener('mouse
 document.getElementById('history-search').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();findHistory();}});
 function openShortcuts(){openDialog('shortcut-modal');}
 const shortcuts=[
+ ['Shift+←','Previous Codex question','\x1b[1;2D'],['Shift+→','Next Codex question','\x1b[1;2C'],
  ['Ctrl+C','Interrupt','\x03'],['Ctrl+D','End input / exit','\x04'],['Ctrl+Z','Suspend','\x1a'],
  ['Ctrl+L','Clear screen','\x0c'],['Ctrl+R','Search command history','\x12'],['Ctrl+A','Start of line','\x01'],
  ['Ctrl+E','End of line','\x05'],['Ctrl+W','Delete previous word','\x17'],['Ctrl+U','Delete to line start','\x15'],

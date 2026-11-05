@@ -130,6 +130,12 @@ const passed=[];
    await page.evaluate(()=>{window.testSends=[];openShortcuts();});
    await page.getByRole('button',{name:'Ctrl+C — Interrupt',exact:true}).click();
    assert.deepEqual(await page.evaluate(()=>window.testSends),['\x03']);
+   for(const [label,sequence] of [['Shift+← — Previous Codex question','\x1b[1;2D'],['Shift+→ — Next Codex question','\x1b[1;2C']]){
+    await page.evaluate(()=>{window.testSends=[];openShortcuts();});
+    await page.getByRole('button',{name:label,exact:true}).tap();
+    assert.deepEqual(await page.evaluate(()=>window.testSends),[sequence]);
+    assert.equal(await page.locator('#shortcut-modal').evaluate(d=>d.open),false);
+   }
   });
   await test('Backspace works for click and touch without duplication',async()=>{
    await page.evaluate(()=>window.testSends=[]);await page.locator('#mob-bksp').click();
