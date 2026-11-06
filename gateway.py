@@ -2392,6 +2392,7 @@ function showHome() {
   saveTerminalTabs();
   renderTerminalTabs();
   onServer = false;
+  window.dispatchEvent(new Event('bridge:server-changed'));
   document.getElementById('home-server').classList.add('active');
   document.querySelectorAll('.machine-server').forEach(el => el.classList.remove('active'));
   document.getElementById('home-view').classList.add('visible');
@@ -2462,6 +2463,7 @@ function enterServer(serverName) {
   document.getElementById('conn-header').classList.remove('visible');
   document.getElementById('conn-divider').classList.remove('visible');
   onServer = true;
+  window.dispatchEvent(new Event('bridge:server-changed'));
   document.getElementById('home-server').classList.remove('active');
   document.getElementById('home-view').classList.remove('visible');
   document.getElementById('sidebar').style.display = '';

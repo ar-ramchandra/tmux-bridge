@@ -37,6 +37,28 @@ const passed=[];
   }
   const {page,context,errors}=await makePage();
   const test=async(name,fn)=>{await fn();passed.push(name);console.log('PASS '+name);};
+  await test('Desktop follows device selection even when welcome styles do not change',async()=>{
+   for(const mobile of [true,false]){
+    const sample=await makePage(mobile);
+    try{
+     await sample.page.evaluate(()=>{
+      showHome();
+      // On initial load welcome already has its default display value.
+      document.getElementById('welcome-item').style.display='';
+     });
+     assert.equal(await sample.page.locator('#desktop-open').evaluate(e=>e.hidden),true);
+     await sample.page.evaluate(()=>enterServer('test'));
+     await sample.page.evaluate(()=>document.getElementById('sidebar').classList.add('open'));
+     assert.equal(await sample.page.getByRole('button',{name:'Desktop',exact:true}).isVisible(),true);
+     await sample.page.getByRole('button',{name:'Desktop',exact:true}).click();
+     assert.equal(await sample.page.getByRole('dialog',{name:'Remote desktop'}).isVisible(),true);
+     await sample.page.getByRole('button',{name:'Close',exact:true}).click();
+     await sample.page.evaluate(()=>showHome());
+     assert.equal(await sample.page.locator('#desktop-open').evaluate(e=>e.hidden),true);
+     assert.deepEqual(sample.errors,[]);
+    }finally{await sample.context.close();}
+   }
+  });
   async function setup(){await page.evaluate(()=>{
    currentServer='test';onServer=true;cachedSessions=[{name:'alpha'}];presenceData={};_layout={};
    document.getElementById('home-view').classList.remove('visible');

@@ -52,7 +52,7 @@ async function openDesktop(server){
 const launch=make('button','session-item','Desktop');launch.id='desktop-open';launch.type='button';launch.title='Open this device’s desktop';launch.onclick=()=>openDesktop(currentServer);
 document.getElementById('welcome-item').after(launch);
 function update(){launch.hidden=typeof currentServer==='undefined'||!currentServer||typeof onServer==='undefined'||!onServer;}
-new MutationObserver(update).observe(document.getElementById('welcome-item'),{attributes:true,attributeFilter:['style']});update();
+window.addEventListener('bridge:server-changed',update);update();
 window.bridgeDesktop={open:openDesktop,close:closeDesktop};
 const style=make('style');style.textContent=`
  #desktop-open{margin:1px 8px;width:calc(100% - 16px);border:0;background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}#desktop-open[hidden]{display:none}
