@@ -62,7 +62,8 @@ async function api(path,options){const r=await fetch(base+'/api/'+server+path,op
   assert.equal(history.ok,true);assert(history.text.length>0);
   console.log('PASS deployed read-only history RPC');
   await page.evaluate(()=>showHistory());
-  await page.waitForFunction(()=>document.getElementById('history-status').textContent.startsWith('Active pane snapshot'),{},{timeout:10000});
+  await page.waitForFunction(historyMode=>document.getElementById('history-modal').open &&
+    document.getElementById('history-text').textContent.includes(historyMode?'history-marker-149':'CTRL_C_RECEIVED'),historyMode,{timeout:10000});
   console.log('PASS deployed history dialog');
   assert.deepEqual(errors,[]);
  }finally{
