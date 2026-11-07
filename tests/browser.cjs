@@ -37,6 +37,37 @@ const passed=[];
   }
   const {page,context,errors}=await makePage();
   const test=async(name,fn)=>{await fn();passed.push(name);console.log('PASS '+name);};
+  await test('new session form selects agents, cancels safely, and preserves duplicate errors',async()=>{
+   const sample=await makePage();
+   try{
+    const p=sample.page,requests=[];
+    await p.route('**/api/test/sessions/*',async r=>{
+     if(r.request().method()!=='POST')return r.fallback();
+     requests.push(r.request().postDataJSON());
+     return r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,created:!r.request().url().endsWith('/exists')})});
+    });
+    await p.evaluate(()=>enterServer('test'));
+    await p.evaluate(()=>document.getElementById('sidebar').classList.add('open'));
+    await p.getByRole('button',{name:'New session',exact:true}).click();
+    assert.equal(await p.getByLabel('Agent',{exact:true}).inputValue(),'codex');
+    await p.getByRole('button',{name:'Cancel',exact:true}).click();assert.equal(requests.length,0);
+    for(const agent of ['codex','claude','opencode','shell']){
+     await p.evaluate(()=>newAgentSession());
+     await p.getByLabel('Session name',{exact:true}).fill('new-'+agent);
+     await p.getByLabel('Agent',{exact:true}).selectOption(agent);
+     await p.getByRole('button',{name:'Create session',exact:true}).click();
+     await p.waitForFunction(name=>currentSession===name,'new-'+agent);
+     assert.deepEqual(requests.at(-1),{agent});
+    }
+    await p.evaluate(()=>newAgentSession());
+    await p.getByLabel('Session name',{exact:true}).fill('exists');
+    await p.getByRole('button',{name:'Create session',exact:true}).click();
+    await p.getByRole('alert').filter({hasText:'already exists'}).waitFor();
+    assert.equal(await p.evaluate(()=>currentSession),'new-shell');
+    await p.getByRole('button',{name:'Cancel',exact:true}).click();
+    assert.deepEqual(sample.errors,[]);
+   }finally{await sample.context.close();}
+  });
   await test('Desktop follows device selection even when welcome styles do not change',async()=>{
    for(const mobile of [true,false]){
     const sample=await makePage(mobile);

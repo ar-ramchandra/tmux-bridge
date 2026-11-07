@@ -32,3 +32,7 @@ the gateway.
 ## Updates
 
 Reload browser tabs after a gateway update. Preserve the gateway CA/configuration and node credentials. Do not run two agents with the same registered name. Test upgrades against a disposable tmux socket before changing a running work session.
+
+## Start an agent session
+
+Choose **New session** beside Sessions, enter a name, and choose **Codex**, **Claude Code**, **OpenCode**, or **Plain terminal**. Codex is the initial selection. The agent must already be installed and signed in on the selected machine. Sessions load the user’s interactive login environment, including tools installed through nvm. If an agent exits or cannot start, the terminal stays open with the error and a shell for recovery. Existing session names are rejected by the form so an existing conversation is not silently selected or replaced.

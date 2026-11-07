@@ -626,13 +626,16 @@ async def proxy_sessions(server: str):
 
 
 # tmux started by a service may pass a minimal PATH to non-login commands.
-# Load the user's login environment and keep a shell alive if Claude exits, so
+# Load interactive login setup (including nvm) and keep a shell if an agent exits, so
 # errors stay visible instead of leaving the browser reconnecting to a gone pane.
-CLAUDE_SESSION_COMMAND = 'exec "${SHELL:-/bin/sh}" -lc ' + shlex.quote(
-    'claude; bridge_status=$?; '
-    'printf "\\nClaude exited (status %s). You can retry from this shell.\\n" "$bridge_status"; '
-    'exec "${SHELL:-/bin/sh}" -l'
-)
+AGENT_SESSION_COMMANDS = {
+    agent: 'exec "${SHELL:-/bin/sh}" -lic ' + shlex.quote(
+        agent + '; bridge_status=$?; '
+        'printf "\\n' + label + ' exited (status %s). You can retry from this shell.\\n" "$bridge_status"; '
+        'exec "${SHELL:-/bin/sh}" -l'
+    ) for agent, label in [('codex', 'Codex'), ('claude', 'Claude'), ('opencode', 'OpenCode')]
+}
+CLAUDE_SESSION_COMMAND = AGENT_SESSION_COMMANDS['claude']
 
 
 @app.post("/api/{server}/sessions/{name}")
@@ -643,8 +646,15 @@ async def proxy_create_session(server: str, name: str, request: Request = None):
     except Exception:
         pass
     # Normalize here as well as serving the UI, so already-open clients benefit.
-    if body.get("command") == "claude":
-        body["command"] = CLAUDE_SESSION_COMMAND
+    if not isinstance(body, dict):
+        return JSONResponse({'error': 'Expected a session configuration'}, status_code=400)
+    if 'agent' in body:
+        agent = body.pop('agent')
+        if not isinstance(agent, str) or agent not in (*AGENT_SESSION_COMMANDS, 'shell'):
+            return JSONResponse({'error': 'Choose Codex, Claude Code, OpenCode, or a plain terminal'}, status_code=400)
+        body['command'] = AGENT_SESSION_COMMANDS.get(agent, '')
+    elif isinstance(body.get('command'), str) and body['command'] in AGENT_SESSION_COMMANDS:
+        body['command'] = AGENT_SESSION_COMMANDS[body['command']]
     return await _rpc_to_server(server, "POST", f"/api/sessions/{name}", body)
 
 
@@ -2066,7 +2076,7 @@ HTML = r"""<!DOCTYPE html>
     <span class="hash">#</span><span class="s-name">welcome</span>
   </div>
   <div id="welcome-viewers"></div>
-  <div class="category-label"><span class="cat-text">Sessions</span><button class="cat-add" title="New Claude session" onclick="newClaudeSession()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button><button class="cat-add" title="New dir" onclick="addProject()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div>
+  <div class="category-label"><span class="cat-text">Sessions</span><button class="cat-add" title="New session" aria-label="New session" onclick="newAgentSession()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button><button class="cat-add" title="New dir" onclick="addProject()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div>
   <div id="session-list"></div>
   <div id="bottom-panel">
     <div id="conn-header">
@@ -2263,6 +2273,26 @@ HTML = r"""<!DOCTYPE html>
             <button onclick="closeDialog('shortcut-modal')">Done</button>
           </div>
         </div>
+      </dialog>
+      <dialog id="new-session-modal" aria-labelledby="new-session-title">
+        <form id="new-session-form" class="dialog-body">
+          <h2 id="new-session-title">New session</h2>
+          <label for="new-session-name">Session name</label>
+          <input id="new-session-name" required pattern="[a-zA-Z0-9_-]+" maxlength="80" autocomplete="off" autocapitalize="off" spellcheck="false" title="Use letters, numbers, hyphens, or underscores">
+          <label for="new-session-agent">Agent</label>
+          <select id="new-session-agent">
+            <option value="codex">Codex</option>
+            <option value="claude">Claude Code</option>
+            <option value="opencode">OpenCode</option>
+            <option value="shell">Plain terminal</option>
+          </select>
+          <p>The selected agent must be installed on this device.</p>
+          <p id="new-session-error" role="alert" hidden></p>
+          <div class="dialog-actions">
+            <button type="button" onclick="closeDialog('new-session-modal')">Cancel</button>
+            <button type="submit" id="new-session-submit">Create session</button>
+          </div>
+        </form>
       </dialog>
       <dialog id="choice-modal" aria-labelledby="choice-title">
         <form method="dialog" class="dialog-body">
@@ -3897,28 +3927,37 @@ async function _loadLayout() {
   } catch(e) {}
 }
 
-async function newClaudeSession() {
-  const server=currentServer;
-  const name = prompt('Session name:');
-  if (!name || !name.trim()) return;
-  const sname = name.trim().replace(/[^a-zA-Z0-9_-]/g, '-');
-  try {
-    const r = await fetch('/api/' + encodeURIComponent(server) + '/sessions/' + sname, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({command: 'claude'}),
-    });
-    const data = await r.json();
-    if (r.ok && data.ok) {
-      if(server!==currentServer){notifyUser('Session created on '+server);return;}
-      await loadSessions();
-      connect(sname);
-      closeSidebar();
-    } else {
-      alert('Failed: ' + (data.error || 'unknown error'));
-    }
-  } catch(e) { alert('Error: ' + e.message); }
+let newSessionServer='',creatingSession=false;
+function newAgentSession() {
+  if(!currentServer || creatingSession)return;
+  newSessionServer=currentServer;
+  document.getElementById('new-session-title').textContent='New session · '+newSessionServer;
+  document.getElementById('new-session-name').value='';
+  document.getElementById('new-session-error').hidden=true;
+  openDialog('new-session-modal');
 }
+document.getElementById('new-session-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  if(creatingSession)return;
+  const server=newSessionServer,name=document.getElementById('new-session-name').value;
+  const agent=document.getElementById('new-session-agent').value;
+  const error=document.getElementById('new-session-error'),submit=document.getElementById('new-session-submit');
+  creatingSession=true;submit.disabled=true;error.hidden=true;
+  try {
+    const r=await fetch('/api/'+encodeURIComponent(server)+'/sessions/'+encodeURIComponent(name),{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent}),
+    });
+    const data=await r.json();
+    if(!r.ok||!data.ok)throw new Error(data.error||'Could not create the session');
+    if(data.created===false)throw new Error('That session name already exists. Choose another name.');
+    closeDialog('new-session-modal');
+    if(server!==currentServer){notifyUser('Session created on '+server);return;}
+    await loadSessions();
+    if(server!==currentServer){notifyUser('Session created on '+server);return;}
+    connect(name);closeSidebar();
+  } catch(e) {error.textContent=e.message;error.hidden=false;}
+  finally{creatingSession=false;submit.disabled=false;}
+});
 
 function addProject() {
   const name = prompt('Dir name:');

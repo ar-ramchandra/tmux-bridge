@@ -1,4 +1,4 @@
-"""New Claude sessions load the login environment and retain startup errors."""
+"""Agent sessions load the login environment and retain startup errors."""
 import os
 from pathlib import Path
 import subprocess
@@ -13,6 +13,22 @@ import gateway
 
 
 class SessionLaunchTests(unittest.TestCase):
+    def test_agent_choices_are_allowlisted_and_override_custom_commands(self):
+        for agent in ['codex', 'claude', 'opencode', 'shell']:
+            rpc = AsyncMock(return_value=JSONResponse({'ok': True, 'created': True}))
+            with patch.object(gateway, '_rpc_to_server', rpc):
+                response = TestClient(gateway.app).post('/api/hpc/sessions/example', json={
+                    'agent': agent, 'command': 'unrelated command',
+                })
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(rpc.await_args.args[-1], {'command': gateway.AGENT_SESSION_COMMANDS.get(agent, '')})
+        for body in [{'agent': 'codex; echo unsafe'}, {'agent': []}, ['codex']]:
+            rpc = AsyncMock()
+            with patch.object(gateway, '_rpc_to_server', rpc):
+                response = TestClient(gateway.app).post('/api/hpc/sessions/example', json=body)
+            self.assertEqual(response.status_code, 400)
+            rpc.assert_not_called()
+
     def test_account_login_is_explicit_same_origin_and_allowlisted(self):
         rpc = AsyncMock(return_value=JSONResponse({'ok': True, 'session': 'bridge-signin-claude'}))
         with patch.object(gateway, '_rpc_to_server', rpc):
@@ -50,7 +66,7 @@ class SessionLaunchTests(unittest.TestCase):
             shell = root / 'login-shell'
             # A deterministic user login profile supplies the CLI's PATH.
             shell.write_text('#!/bin/sh\n'
-                             'if [ "$1" = "-lc" ]; then\n'
+                             'if [ "$1" = "-lic" ]; then\n'
                              '  export PATH="$BRIDGE_TEST_BIN:/usr/bin:/bin"\n'
                              '  exec /bin/sh -c "$2"\n'
                              'fi\n'
