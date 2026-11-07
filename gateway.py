@@ -44,6 +44,7 @@ import cloudflare
 from browser_security import BrowserOriginMiddleware
 from activity_gateway import ActivityGateway
 from desktop_gateway import DesktopGateway
+from power import WakeController
 from account_usage import ensure_table as ensure_usage_table, store_snapshot as store_account_usage, snapshots as account_snapshots
 
 app = FastAPI()
@@ -51,6 +52,7 @@ app.add_middleware(BrowserOriginMiddleware)
 
 LAYOUT_FILE = (Path(os.environ["TMUX_BRIDGE_CONFIG_DIR"]).expanduser() / "layout.json"
                if os.environ.get("TMUX_BRIDGE_CONFIG_DIR") else Path.home() / ".config/tmux-bridge/layout.json")
+wake_controller = WakeController(LAYOUT_FILE.parent / 'wake.json')
 
 activity_gateway = ActivityGateway(Path(os.environ.get('TMUX_BRIDGE_ACTIVITY_DIR',
     str(Path(os.environ.get('TMUX_BRIDGE_CONFIG_DIR',str(Path.home()/'.config/tmux-bridge')))/'activity'))))
@@ -582,6 +584,7 @@ async def gateway_specs():
 async def list_servers():
     """Returns servers with live connection state."""
     registered = list_registered_servers()
+    wake_targets = wake_controller.targets()
     result = []
     for srv in registered:
         if srv.get("revoked"):
@@ -593,8 +596,20 @@ async def list_servers():
             "connected": conn is not None and conn.is_active,
             "connected_since": conn.connected_at if conn and conn.is_active else None,
             "sessions": conn.sessions if conn and conn.is_active else [],
+            "wake_available": name in wake_targets,
         })
     return result
+
+
+@app.post('/api/{server}/wake')
+async def wake_server(server: str):
+    if not any(s['name'] == server and not s.get('revoked') for s in list_registered_servers()):
+        return JSONResponse({'error': 'Unknown device'}, status_code=404)
+    conn = gw_manager.get_server(server)
+    if conn and conn.is_active:
+        return JSONResponse({'status': 'already_connected'})
+    status, body = wake_controller.wake(server)
+    return JSONResponse(body, status_code=status)
 
 
 # ── Proxied API endpoints (RPC over server WebSocket) ──
@@ -2948,7 +2963,24 @@ function renderHomeCards() {
       (srv.connected ? 'connected' : 'offline') + '</span></div>' +
       '<div class="sc-url">' + (srv.sessions ? srv.sessions.length + ' sessions' : 'no sessions') + '</div>';
     if (srv.connected) card.addEventListener('click', () => enterServer(srv.name));
-    else card.style.opacity = '0.5';
+    else if (srv.wake_available) {
+      const wake = document.createElement('button');
+      wake.type = 'button'; wake.className = 'btn'; wake.textContent = 'Wake';
+      wake.setAttribute('aria-label', 'Wake ' + srv.name);
+      wake.addEventListener('click', async event => {
+        event.stopPropagation(); wake.disabled = true; wake.textContent = 'Sending…';
+        try {
+          const response = await fetch('/api/' + encodeURIComponent(srv.name) + '/wake', {method:'POST'});
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.error || 'Wake request failed');
+          wake.textContent = 'Wake sent';
+          notifyUser(body.message || 'Device is already connected.');
+        } catch (error) {
+          wake.disabled = false; wake.textContent = 'Wake'; notifyUser(error.message);
+        }
+      });
+      card.appendChild(wake);
+    } else card.style.opacity = '0.5';
     cards.appendChild(card);
   });
 }

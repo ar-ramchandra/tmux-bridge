@@ -37,6 +37,24 @@ const passed=[];
   }
   const {page,context,errors}=await makePage();
   const test=async(name,fn)=>{await fn();passed.push(name);console.log('PASS '+name);};
+  await test('offline configured devices offer wake with an honest pending result',async()=>{
+   const sample=await makePage();
+   try{
+    const p=sample.page,requests=[];
+    await p.route('**/api/sleeping/wake',async r=>{
+     requests.push(r.request().method());
+     return r.fulfill({status:202,contentType:'application/json',body:JSON.stringify({status:'wake_sent',message:'Wake request sent. Waiting for the device to reconnect.'})});
+    });
+    await p.evaluate(()=>{cachedServerList=[{name:'sleeping',connected:false,wake_available:true},{name:'offline',connected:false},{name:'awake',connected:true,wake_available:true}];showHome();switchHomeTab('dashboard');renderHomeCards();});
+    assert.equal(await p.locator('#home-cards button').count(),1);
+    await p.getByRole('button',{name:'Wake sleeping',exact:true}).click();
+    await p.waitForFunction(()=>document.querySelector('[aria-label="Wake sleeping"]').textContent==='Wake sent');
+    assert.deepEqual(requests,['POST']);
+    assert.equal(await p.getByRole('button',{name:'Wake sleeping',exact:true}).textContent(),'Wake sent');
+    assert.equal(await p.getByRole('button',{name:'Wake sleeping',exact:true}).isDisabled(),true);
+    assert.equal(await p.locator('#home-cards .sc-name').first().textContent(),'sleeping offline');
+   }finally{await sample.context.close();}
+  });
   await test('new session form selects agents, cancels safely, and preserves duplicate errors',async()=>{
    const sample=await makePage();
    try{

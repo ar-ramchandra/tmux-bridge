@@ -33,7 +33,7 @@ notifications = ["pywebpush==2.5.0"]
 mcp = ["mcp==2.3.0"]
 
 [tool.setuptools]
-py-modules = ["bridge_cli", "gateway", "server", "auth", "protocol", "cloudflare", "sysinfo", "browser_security", "mtls_proxy", "transport_pki", "node_setup", "node_install", "node_runtime", "activity", "activity_gateway", "activity_mcp", "integrations", "account_usage", "desktop_agent", "desktop_gateway"]
+py-modules = ["bridge_cli", "gateway", "server", "auth", "protocol", "cloudflare", "sysinfo", "browser_security", "mtls_proxy", "transport_pki", "node_setup", "node_install", "node_runtime", "activity", "activity_gateway", "activity_mcp", "integrations", "account_usage", "desktop_agent", "desktop_gateway", "power"]
 packages = ["tmux_bridge_assets"]
 
 [tool.setuptools.package-data]
