@@ -21,9 +21,9 @@ const source=fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/desktop.
     <script>let currentServer='macstudio',onServer=true;window.WebSocket=class extends EventTarget {};</script>
     <script type="module" src="/desktop.js"></script>`});
   });
-  await page.goto('http://desktop.test');
+  await page.goto('https://desktop.test');
   const open=async(server='macstudio')=>{await page.evaluate(()=>window.rfb=null);await page.evaluate(s=>window.bridgeDesktop.open(s),server);await page.waitForFunction(()=>!!window.rfb);};
-  const event=async(type,types=['username','password'])=>page.evaluate(({type,types})=>window.rfb.dispatchEvent(new CustomEvent(type,{detail:{types}})),{type,types});
+  const event=async(type,types=['username','password'])=>{await page.evaluate(({type,types})=>window.rfb.dispatchEvent(new CustomEvent(type,{detail:{types}})),{type,types});if(type==='connect')await page.waitForFunction(()=>document.querySelector('#desktop-status').textContent==='Connected · Tap to click; use Keyboard to type.');};
   const signIn=async(user='test-user',pass='test-password')=>{
    await page.getByLabel('Desktop username').fill(user);
    await page.getByLabel('Desktop password').fill(pass);
@@ -57,10 +57,22 @@ const source=fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/desktop.
   await signIn();await event('connect');
   assert.deepEqual(await page.evaluate(()=>[localStorage.length,sessionStorage.length]),[0,0]);
   await page.reload();await open();await event('credentialsrequired');
-  assert.deepEqual(await page.evaluate(()=>rfb.sent),[]);
+  assert.deepEqual(await page.evaluate(()=>rfb.sent),[{username:'test-user',password:'test-password'}]);
   assert.equal(await page.getByLabel('Desktop username').getAttribute('autocomplete'),'section-desktop-macstudio username');
   assert.equal(await page.getByLabel('Desktop password').getAttribute('autocomplete'),'section-desktop-macstudio current-password');
-  console.log('PASS no persistent password storage; password-manager autofill enabled');
+  console.log('PASS remembered login survives reload without localStorage or sessionStorage secrets');
+  await open('temporary');await event('credentialsrequired');
+  await page.getByLabel('Remember on this browser').uncheck();await signIn();await event('connect');
+  await open('temporary');await event('credentialsrequired');await event('connect');
+  await page.reload();await open('temporary');await event('credentialsrequired');
+  assert.deepEqual(await page.evaluate(()=>rfb.sent),[]);
+  console.log('PASS opting out prevents persistence');
+  await open('no-storage');await event('credentialsrequired');
+  await page.evaluate(()=>{indexedDB.open=()=>{throw new Error('Storage blocked');};});
+  await signIn();
+  await page.evaluate(()=>rfb.dispatchEvent(new Event('connect')));
+  await page.getByRole('status').filter({hasText:'could not save your sign-in'}).waitFor();
+  console.log('PASS storage failure is visible instead of claiming sign-in was saved');
   assert.deepEqual(errors,[]);
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

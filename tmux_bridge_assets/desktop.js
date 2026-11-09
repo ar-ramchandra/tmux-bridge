@@ -1,8 +1,48 @@
 /* Desktop viewer uses the same gateway admission boundary as terminal access. */
 let viewer=null,dialog=null,generation=0,connected=false;
-// Successful credentials stay only in this page's memory, scoped to the device.
+// Persistent entries are encrypted with non-exportable browser keys. No secrets
+// are stored in localStorage, URLs, or a gateway credential API.
 const credentialsByServer=new Map();
 window.addEventListener('pagehide',()=>credentialsByServer.clear());
+let credentialChanges=Promise.resolve();
+async function credentialRecord(server,value,write=false){
+  const db=await new Promise((resolve,reject)=>{
+    const request=indexedDB.open('tmux-bridge-desktop-login',1);
+    request.onupgradeneeded=()=>request.result.createObjectStore('credentials');
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>reject(request.error);
+  });
+  try{return await new Promise((resolve,reject)=>{
+    const tx=db.transaction('credentials',write?'readwrite':'readonly'),store=tx.objectStore('credentials');
+    const request=write?(value===null?store.delete(server):store.put(value,server)):store.get(server);
+    tx.oncomplete=()=>resolve(request.result);
+    tx.onabort=()=>reject(tx.error||new Error('Desktop login storage unavailable'));
+    tx.onerror=()=>reject(tx.error);
+  });}finally{db.close();}
+}
+function persistCredentials(server,value){
+  const change=credentialChanges.then(async()=>{
+    if(value===null)return credentialRecord(server,null,true);
+    const key=await crypto.subtle.generateKey({name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+    const iv=crypto.getRandomValues(new Uint8Array(12));
+    const encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:new TextEncoder().encode(server)},key,new TextEncoder().encode(JSON.stringify(value)));
+    await credentialRecord(server,{key,iv,encrypted},true);
+  });
+  credentialChanges=change.catch(()=>{});
+  return change;
+}
+async function loadCredentials(server){
+  await credentialChanges;
+  if(credentialsByServer.has(server))return credentialsByServer.get(server);
+  try{
+    const record=await credentialRecord(server);
+    if(!record)return null;
+    const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:record.iv,additionalData:new TextEncoder().encode(server)},record.key,record.encrypted);
+    const value=JSON.parse(new TextDecoder().decode(plain));
+    if(typeof value.username!=='string'||typeof value.password!=='string')return null;
+    credentialsByServer.set(server,value);return value;
+  }catch(_){return null;}
+}
 const make=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e;};
 function closeDesktop(){generation++;connected=false;viewer?.disconnect();viewer=null;dialog?.close();if(dialog){dialog.querySelector('form').reset();dialog.querySelector('#desktop-keyboard').value='';}}
 function build(){
@@ -16,7 +56,8 @@ function build(){
   const form=make('form','desktop-credentials');form.hidden=true;
   const userLabel=make('label','','Desktop username'),username=make('input');username.name='username';username.autocomplete='username';username.autocapitalize='none';username.spellcheck=false;userLabel.append(username);
   const passLabel=make('label','','Desktop password'),password=make('input');password.name='password';password.type='password';password.autocomplete='current-password';passLabel.append(password);
-  const submit=make('button','','Sign in');submit.type='submit';form.append(userLabel,passLabel,submit);
+  const rememberLabel=make('label','','Remember on this browser'),remember=make('input');remember.type='checkbox';remember.name='remember';remember.defaultChecked=true;rememberLabel.prepend(remember);
+  const submit=make('button','','Sign in');submit.type='submit';form.append(userLabel,passLabel,rememberLabel,submit);
   const screen=make('div','desktop-screen');screen.id='desktop-screen';
   const input=make('textarea','desktop-keyboard');input.id='desktop-keyboard';input.setAttribute('aria-label','Type into remote desktop');input.setAttribute('autocapitalize','off');input.autocomplete='off';input.spellcheck=false;input.setAttribute('autocorrect','off');
   const keysyms={Enter:0xff0d,Backspace:0xff08,Tab:0xff09,Escape:0xff1b,ArrowLeft:0xff51,ArrowUp:0xff52,ArrowRight:0xff53,ArrowDown:0xff54,Delete:0xffff};
@@ -34,16 +75,19 @@ async function openDesktop(server){
   if(typeof term!=='undefined')term.blur();
   dialog.querySelector('#desktop-title').textContent=server+' · Desktop';
   const status=dialog.querySelector('#desktop-status'),form=dialog.querySelector('form'),screen=dialog.querySelector('#desktop-screen');
-  let pendingCredentials=null,triedSaved=false;
+  let pendingCredentials=null,triedSaved=false,rememberLogin=true,saved=null;
   const username=form.querySelector('input[name=username]'),password=form.querySelector('input[name=password]');
   username.autocomplete='section-desktop-'+server+' username';
   password.autocomplete='section-desktop-'+server+' current-password';
-  form.onsubmit=e=>{e.preventDefault();if(token!==generation||!viewer)return;pendingCredentials={username:username.value,password:password.value};viewer.sendCredentials(pendingCredentials);form.reset();form.hidden=true;status.textContent='Signing in…';};
+  form.onsubmit=e=>{e.preventDefault();if(token!==generation||!viewer)return;rememberLogin=form.elements.remember.checked;pendingCredentials={username:username.value,password:password.value};viewer.sendCredentials(pendingCredentials);form.reset();form.hidden=true;status.textContent='Signing in…';};
   screen.replaceChildren();form.hidden=true;status.textContent='Checking desktop…';
   try{
     const response=await fetch('/api/'+encodeURIComponent(server)+'/desktop',{signal:AbortSignal.timeout(12000)}),state=await response.json();
     if(token!==generation)return;
     if(!response.ok||!state.available)throw new Error(state.message||state.error||'Desktop unavailable');
+    saved=await loadCredentials(server);
+    rememberLogin=saved?.remember!==false;
+    if(token!==generation)return;
     const {default:RFB}=await import('/desktop-assets/core/rfb.js');
     if(token!==generation)return;
     const socket=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/desktop/'+encodeURIComponent(server));
@@ -52,13 +96,22 @@ async function openDesktop(server){
     viewer.compressionLevel=2;viewer.qualityLevel=6;status.textContent='Connecting…';
     viewer.addEventListener('credentialsrequired',e=>{
       if(token!==generation)return;
-      const types=e.detail.types,saved=credentialsByServer.get(server);
-      if(!triedSaved&&saved&&types.every(type=>Boolean(saved[type]))){triedSaved=true;pendingCredentials={...saved};status.textContent='Signing in…';viewer.sendCredentials(pendingCredentials);return;}
-      if(triedSaved){credentialsByServer.delete(server);pendingCredentials=null;}
-      form.hidden=false;username.parentElement.hidden=!types.includes('username');status.textContent='Sign in once for this device while this gateway tab stays open.';
+      const types=e.detail.types;
+      if(!triedSaved&&saved&&types.every(type=>Boolean(saved[type]))){triedSaved=true;pendingCredentials={username:saved.username,password:saved.password};status.textContent='Signing in…';viewer.sendCredentials(pendingCredentials);return;}
+      if(triedSaved){credentialsByServer.delete(server);persistCredentials(server,null).catch(()=>{});pendingCredentials=null;saved=null;}
+      form.hidden=false;username.parentElement.hidden=!types.includes('username');status.textContent='Sign in to this device. Remembered logins survive closing or reloading the gateway.';
     });
-    viewer.addEventListener('connect',()=>{if(token!==generation)return;if(pendingCredentials)credentialsByServer.set(server,{...pendingCredentials});pendingCredentials=null;connected=true;status.textContent='Connected · Tap to click; use Keyboard to type.';form.reset();form.hidden=true;});
-    viewer.addEventListener('securityfailure',()=>{if(token!==generation)return;credentialsByServer.delete(server);pendingCredentials=null;status.textContent='Desktop login failed. Close and reopen to try again.';});
+    viewer.addEventListener('connect',async()=>{
+      if(token!==generation)return;
+      const accepted=pendingCredentials;pendingCredentials=null;connected=true;form.reset();form.hidden=true;
+      if(accepted)credentialsByServer.set(server,{...accepted,remember:rememberLogin});
+      status.textContent='Connected · Saving sign-in…';
+      try{
+        if(accepted)await persistCredentials(server,rememberLogin?accepted:null);
+        if(token===generation&&connected)status.textContent='Connected · Tap to click; use Keyboard to type.';
+      }catch(_){if(token===generation&&connected)status.textContent='Connected · This browser could not save your sign-in; it will ask again after reload.';}
+    });
+    viewer.addEventListener('securityfailure',()=>{if(token!==generation)return;credentialsByServer.delete(server);persistCredentials(server,null).catch(()=>{});pendingCredentials=null;status.textContent='Desktop login failed. Close and reopen to try again.';});
     viewer.addEventListener('disconnect',()=>{if(token!==generation)return;connected=false;form.reset();form.hidden=true;if(!/failed|already open|offline/.test(status.textContent))status.textContent='Desktop disconnected. Close and reopen to reconnect.';});
   }catch(e){if(token===generation)status.textContent=e.name==='TimeoutError'?'Desktop check timed out. Close and retry.':e.message;}
 }
