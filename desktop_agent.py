@@ -129,6 +129,24 @@ class DesktopAgent:
         self.root, self.config, self.tls_options = Path(root), config, tls_options
         self.tasks = set()
         self.stream = None
+        self.stream_ticket = None
+        self.connect_lock = asyncio.Lock()
+
+    async def _start_stream(self, ticket):
+        # Only the authenticated gateway sends these requests, after admitting
+        # one exclusive browser viewer. A new ticket can arrive before the old
+        # stream has received its close frame, so retire that residual stream.
+        async with self.connect_lock:
+            if self.stream and not self.stream.done():
+                if ticket == self.stream_ticket:
+                    return 409, {'error': 'Desktop connection is already starting'}
+                self.stream.cancel()
+                done, _ = await asyncio.wait({self.stream}, timeout=6)
+                if not done:
+                    return 409, {'error': 'Previous desktop connection is still closing'}
+            self.stream_ticket = ticket
+            self.stream = asyncio.create_task(self._relay(ticket))
+            return 202, {'ok': True}
 
     async def request(self, ws, msg):
         # Bound control work; probes must not hold up terminal input.
@@ -151,11 +169,8 @@ class DesktopAgent:
                     status, body = 400, {'error': 'Invalid desktop ticket'}
                 elif desktop_port(self.root) is None:
                     status, body = 409, {'error': 'Desktop access is not configured'}
-                elif self.stream and not self.stream.done():
-                    status, body = 409, {'error': 'Desktop is already open. Close the other viewer first.'}
                 else:
-                    self.stream = asyncio.create_task(self._relay(ticket))
-                    status, body = 202, {'ok': True}
+                    status, body = await self._start_stream(ticket)
             await ws.send(make_rpc_response(msg['id'], status, body))
         except Exception:
             pass  # Disconnects are retried explicitly by the browser.
@@ -180,7 +195,7 @@ class DesktopAgent:
                 managed = False
             url = self.config['gateway'].replace('https:', 'wss:').replace('http:', 'ws:') + '/server-ws'
             async with connect(url, max_size=2**20, max_queue=4, compression=None,
-                               open_timeout=12, ping_interval=20, ping_timeout=30,
+                               open_timeout=12, close_timeout=1, ping_interval=20, ping_timeout=30,
                                **self.tls_options(self.config)) as ws:
                 proof = create_auth_proof((self.root/'server.key').read_bytes(), (self.root/'server.crt').read_bytes())
                 await ws.send(json.dumps(proof))
@@ -222,7 +237,10 @@ class DesktopAgent:
         finally:
             if writer:
                 writer.close()
-                await writer.wait_closed()
+                try:
+                    await asyncio.wait_for(writer.wait_closed(), 2)
+                except (OSError, asyncio.TimeoutError):
+                    pass
 
     async def stop(self):
         tasks = list(self.tasks)

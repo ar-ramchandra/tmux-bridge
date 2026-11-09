@@ -163,6 +163,38 @@ class DesktopRelayTests(unittest.IsolatedAsyncioTestCase):
             await self.agent._relay(secrets.token_urlsafe(32))
         self.assertFalse(self.gateway.links)
 
+    async def test_new_gateway_ticket_retires_old_stream_and_duplicate_ticket_is_rejected(self):
+        closing = asyncio.Event()
+        async def old_stream():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await closing.wait()
+        previous = asyncio.create_task(old_stream())
+        await asyncio.sleep(0)
+        self.agent.stream = previous
+        ticket = secrets.token_urlsafe(32)
+        self.agent.stream_ticket = ticket
+        responses = []
+        class Reply:
+            async def send(self, message): responses.append(json.loads(message))
+        request = {'id':'reopen', 'method':'POST', 'path':'/api/desktop/connect',
+                   'body':{'ticket':ticket}}
+        await self.agent._request(Reply(), request)
+        self.assertEqual(responses.pop()['status'],409)
+        self.assertIs(self.agent.stream,previous)
+        self.assertFalse(previous.done())
+        request['body']['ticket'] = secrets.token_urlsafe(32)
+        pending = asyncio.create_task(self.agent._request(Reply(), request))
+        await asyncio.sleep(.01)
+        self.assertFalse(pending.done())
+        closing.set()
+        await asyncio.wait_for(pending,2)
+        self.assertEqual(responses.pop()['status'],202)
+        self.assertTrue(previous.cancelled())
+        self.assertIsNot(self.agent.stream,previous)
+        await asyncio.wait_for(self.agent.stream,3)
+
     async def test_real_authenticated_binary_stream_and_exclusive_control(self):
         self.assertTrue((await desktop_status(self.root))['available'])
         url = 'ws://127.0.0.1:'+str(self.port)+'/ws/desktop/node'

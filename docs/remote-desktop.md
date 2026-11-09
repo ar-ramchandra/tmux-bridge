@@ -4,6 +4,8 @@ Select a connected machine in the sidebar, then **Desktop**. The viewer opens in
 
 This controls the desktop supplied by the machine's VNC service. It can be used to complete a browser login or work in a graphical application. It does not create a desktop on a headless machine. Closing the viewer disconnects desktop control and leaves applications and tmux sessions running. One gateway viewer can control each machine at a time; close the existing viewer before opening another.
 
+When a viewer reopens quickly, the gateway first admits the new connection, then the node retires any leftover stream from the previous connection before starting the new one. Desktop cleanup has bounded waits; it runs separately from terminal input.
+
 ## Enable a machine
 
 Update both the gateway and node agent. Configure a local VNC server, such as macOS Screen Sharing or a Linux VNC service, with authentication. The bridge never enables an operating-system service, changes its credentials, or opens a firewall automatically. Restrict the desktop service to loopback or otherwise firewall it appropriately; do not publish VNC or RDP ports on the internet.
@@ -53,3 +55,5 @@ The gateway remains a trusted intermediary that can read desktop traffic. HTTPS 
 ## Validation and limits
 
 Automated Chromium and WebKit tests exercise Apple Remote Desktop username/password and VNC password authentication against controlled protocol fixtures, framebuffer rendering, touch pointer events, keyboard input, and disconnects. Persistent-profile tests verify saved authentication after reload, a new tab, and a browser process restart, plus recovery after a changed password. They do not authenticate a real user's Mac account. Relay tests check signed node authentication, origin enforcement, ticket expiry and identity binding, binary transport, and exclusive control. Physical mobile keyboards, operating-system permissions, and individual VNC security configurations can still vary. A service that requires an unsupported VNC security extension will not connect.
+
+For an explicitly authorized real node with managed login configured, run `BRIDGE_SERVER=workstation node tests/live-desktop.cjs`, then repeat with `BROWSER_ENGINE=webkit`. Optionally set `BRIDGE_URL`. This opens the actual desktop three times, including reloads, verifies framebuffer rendering without a credential prompt, and closes its viewer. It does not type into the desktop or save screenshots. Do not target a device without permission to view its desktop.
