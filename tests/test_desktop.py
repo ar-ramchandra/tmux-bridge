@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 import secrets
@@ -7,6 +8,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from fastapi import FastAPI, WebSocket
 import uvicorn
@@ -15,7 +17,7 @@ from websockets.exceptions import ConnectionClosed, InvalidStatusCode
 
 import auth
 from browser_security import BrowserOriginMiddleware
-from desktop_agent import DesktopAgent, desktop_port, desktop_status
+from desktop_agent import DesktopAgent, desktop_port, desktop_status, managed_credentials
 from desktop_gateway import DesktopGateway, DesktopLink
 
 
@@ -30,6 +32,23 @@ class DesktopConfigTests(unittest.TestCase):
                 self.assertIsNone(desktop_port(root))
             (root/'desktop.json').write_text('{"enabled":true,"port":5900}')
             self.assertEqual(desktop_port(root), 5900)
+
+    def test_managed_credentials_are_explicit_and_keychain_errors_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root/'desktop.json'
+            config.write_text('{"enabled":true}')
+            self.assertIsNone(managed_credentials(root))
+            config.write_text(json.dumps({'enabled':True, 'managed_auth':{
+                'source':'keychain','service':'bridge-test','account':'test-user'}}))
+            with patch('desktop_agent.sys.platform', 'darwin'), patch('desktop_agent.subprocess.run') as run:
+                run.return_value.returncode = 1
+                with self.assertRaises(ValueError):
+                    managed_credentials(root)
+                run.return_value.returncode = 0
+                run.return_value.stdout = b'test-password\n'
+                self.assertEqual(managed_credentials(root), ('test-user', 'test-password'))
+                self.assertEqual(run.call_args.args[0][-5:], ['-s','bridge-test','-a','test-user','-w'])
 
 
 class DesktopRelayTests(unittest.IsolatedAsyncioTestCase):
@@ -95,12 +114,54 @@ class DesktopRelayTests(unittest.IsolatedAsyncioTestCase):
         try:
             writer.write(b'RFB 003.008\n')
             await writer.drain()
+            if getattr(self, 'managed_fixture', False):
+                self.assertEqual(await reader.readexactly(12), b'RFB 003.008\n')
+                writer.write(bytes([1,30])); await writer.drain()
+                self.assertEqual(await reader.readexactly(1), bytes([30]))
+                # A fixed test-only Mersenne prime; no real user credentials.
+                prime, generator, private, size = (1 << 1279) - 1, 3, 17, 160
+                public = pow(generator, private, prime).to_bytes(size,'big')
+                writer.write(generator.to_bytes(2,'big')+size.to_bytes(2,'big')+prime.to_bytes(size,'big')+public)
+                await writer.drain()
+                data = await reader.readexactly(128+size)
+                shared = pow(int.from_bytes(data[128:],'big'),private,prime).to_bytes(size,'big')
+                cipher = Cipher(algorithms.AES(hashlib.md5(shared).digest()),modes.ECB()).decryptor()
+                plain = cipher.update(data[:128])+cipher.finalize()
+                self.assertEqual(plain[:64].rstrip(b'\0'),b'test-user')
+                self.assertEqual(plain[64:].rstrip(b'\0'),b'test-password')
+                result = 1 if getattr(self, 'reject_managed', False) else 0
+                writer.write(result.to_bytes(4,'big')); await writer.drain()
+                if result:
+                    return
             while data := await reader.read(65536):
                 writer.write(data)
                 await writer.drain()
         finally:
             writer.close()
             await writer.wait_closed()
+
+    async def test_managed_auth_stays_on_node_and_browser_needs_no_second_login(self):
+        self.managed_fixture = True
+        url = 'ws://127.0.0.1:'+str(self.port)+'/ws/desktop/node'
+        origin = 'http://127.0.0.1:'+str(self.port)
+        with patch('desktop_agent.managed_credentials', return_value=('test-user','test-password')):
+            async with connect(url, origin=origin) as browser:
+                self.assertEqual(await asyncio.wait_for(browser.recv(),5),b'RFB 003.008\n')
+                await browser.send(b'RFB 003.')
+                await browser.send(b'008\n')
+                self.assertEqual(await browser.recv(),bytes([1,1]))
+                # Coalesced client-init bytes must not be discarded.
+                await browser.send(bytes([1,1]))
+                self.assertEqual(await browser.recv(),bytes(4))
+                self.assertEqual(await browser.recv(),bytes([1]))
+                await browser.send(b'frame-data')
+                self.assertEqual(await browser.recv(),b'frame-data')
+
+    async def test_rejected_managed_credential_never_opens_unauthenticated_viewer(self):
+        self.managed_fixture = self.reject_managed = True
+        with patch('desktop_agent.managed_credentials', return_value=('test-user','test-password')):
+            await self.agent._relay(secrets.token_urlsafe(32))
+        self.assertFalse(self.gateway.links)
 
     async def test_real_authenticated_binary_stream_and_exclusive_control(self):
         self.assertTrue((await desktop_status(self.root))['available'])

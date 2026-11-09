@@ -20,6 +20,26 @@ The agent always connects to `127.0.0.1`; the browser cannot choose a target hos
 
 ## Transport and credentials
 
+### Automatic login on a managed Mac
+
+A Mac node can authenticate its own loopback desktop using a dedicated generic-password item in the node user's macOS Keychain. Configure the reference in its private `desktop.json`:
+
+```json
+{
+  "enabled": true,
+  "port": 5900,
+  "managed_auth": {
+    "source": "keychain",
+    "service": "tmux-bridge.desktop.workstation",
+    "account": "your-mac-username"
+  }
+}
+```
+
+The referenced item must hold a valid account password for Apple's screen-sharing authentication. Provision it locally through Keychain Access or a private administrator workflow; do not put the password in this JSON, shell history, or a node bundle. The node user's `/usr/bin/security` access to that item must work without a prompt. A locked/unavailable Keychain or rejected password prevents connection; the agent never falls back to disabling desktop authentication.
+
+With this explicit opt-in, operators admitted to the gateway can open the desktop without a second credential prompt. The node completes Apple ARD authentication locally and presents the authenticated stream over the existing signed, ticket-bound gateway connection. The password stays on the node and is not sent to the gateway or browser. This creates no unauthenticated TCP listener and does not enable legacy VNC authentication or bypass the Mac's lock screen. Only configure this for a gateway whose admitted operators are trusted to control that desktop. Remove `managed_auth` to return to browser-entered credentials.
+
 The desktop uses the gateway's existing browser admission policy and signed node identity. In an installation with the private-CA mTLS carrier, the separate desktop stream uses the same mTLS configuration as the terminal agent. It requires a short-lived, single-use connection ticket bound to that node. Tickets are kept in memory and never placed in browser URLs. The stream has bounded messages and backpressure, and does not share the terminal data connection.
 
 Desktop credentials are sent to the VNC server and cleared from the form after submission. **Remember on this browser** saves a login only after authentication succeeds, so reopening the viewer, reloading the page, or restarting the browser does not require entering it again. Uncheck it for a login that should last only in the current tab. Each device has its own entry; a rejected saved login is removed rather than retried indefinitely. Browser storage failures are shown in the connection status.

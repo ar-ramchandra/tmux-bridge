@@ -2,13 +2,96 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 import re
+import secrets
+import subprocess
+import sys
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from websockets.legacy.client import connect
 from auth import create_auth_proof
 from protocol import make_rpc_response
+
+
+def managed_credentials(root):
+    """An explicit node-local Keychain opt-in; never expose credentials by RPC."""
+    config = json.loads((Path(root) / 'desktop.json').read_text())
+    managed = config.get('managed_auth')
+    if managed is None:
+        return None
+    if not isinstance(managed, dict) or managed.get('source') != 'keychain' or sys.platform != 'darwin':
+        raise ValueError('Unsupported managed desktop credential source')
+    service, account = managed.get('service'), managed.get('account')
+    if not all(isinstance(value, str) and 0 < len(value) <= 128 for value in (service, account)):
+        raise ValueError('Invalid managed desktop credential reference')
+    result = subprocess.run(['/usr/bin/security', 'find-generic-password', '-s', service,
+                             '-a', account, '-w'], capture_output=True, timeout=5)
+    if result.returncode:
+        raise ValueError('Managed desktop credential is unavailable')
+    return account, result.stdout.decode().removesuffix('\n')
+
+
+async def authenticate_ard(reader, writer, credentials):
+    """Authenticate only the node's loopback desktop using Apple's ARD type 30."""
+    username, password = (value.encode('utf-8') for value in credentials)
+    if not all(0 < len(value) <= 63 and b'\0' not in value for value in (username, password)):
+        raise ValueError('Invalid managed desktop credentials')
+    writer.write(b'RFB 003.008\n')
+    await writer.drain()
+    count = (await reader.readexactly(1))[0]
+    if not count or 30 not in await reader.readexactly(count):
+        raise ValueError('Desktop does not offer Apple authentication')
+    writer.write(bytes([30]))
+    await writer.drain()
+    generator = int.from_bytes(await reader.readexactly(2), 'big')
+    size = int.from_bytes(await reader.readexactly(2), 'big')
+    if not 128 <= size <= 512:
+        raise ValueError('Invalid desktop key size')
+    prime = int.from_bytes(await reader.readexactly(size), 'big')
+    peer = int.from_bytes(await reader.readexactly(size), 'big')
+    if not 1 < generator < prime - 1 or not 1 < peer < prime - 1:
+        raise ValueError('Invalid desktop key parameters')
+    private = secrets.randbits(size * 8) or 1
+    public = pow(generator, private, prime).to_bytes(size, 'big')
+    shared = pow(peer, private, prime).to_bytes(size, 'big')
+    # MD5 and AES-ECB are mandated by Apple's ARD wire protocol.
+    key = hashlib.md5(shared).digest()
+    plain = username.ljust(64, b'\0') + password.ljust(64, b'\0')
+    cipher = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
+    writer.write(cipher.update(plain) + cipher.finalize() + public)
+    await writer.drain()
+    if int.from_bytes(await reader.readexactly(4), 'big') != 0:
+        raise ValueError('Desktop rejected its managed credential')
+
+
+async def managed_browser_handshake(ws):
+    """No second password inside the already-authenticated gateway desktop link.
+
+    Called only after upstream authentication and signed node/ticket admission.
+    No unauthenticated TCP listener is created.
+    """
+    pending = bytearray()
+    async def read(size):
+        while len(pending) < size:
+            frame = await ws.recv()
+            if not isinstance(frame, bytes) or len(frame) > 64:
+                raise ValueError('Invalid desktop handshake')
+            pending.extend(frame)
+        value = bytes(pending[:size])
+        del pending[:size]
+        return value
+    await ws.send(b'RFB 003.008\n')
+    if await read(12) != b'RFB 003.008\n':
+        raise ValueError('Unsupported browser desktop version')
+    await ws.send(bytes([1, 1]))
+    if await read(1) != b'\x01':
+        raise ValueError('Unsupported browser desktop authentication')
+    await ws.send(bytes(4))
+    return bytes(pending)
 
 
 def desktop_port(root):
@@ -88,6 +171,13 @@ class DesktopAgent:
             header = await asyncio.wait_for(reader.readexactly(12), 5)
             if not re.fullmatch(rb'RFB \d{3}\.\d{3}\n', header):
                 return
+            credentials = await asyncio.to_thread(managed_credentials, self.root)
+            if credentials is not None:
+                await asyncio.wait_for(authenticate_ard(reader, writer, credentials), 10)
+                credentials = None
+                managed = True
+            else:
+                managed = False
             url = self.config['gateway'].replace('https:', 'wss:').replace('http:', 'ws:') + '/server-ws'
             async with connect(url, max_size=2**20, max_queue=4, compression=None,
                                open_timeout=12, ping_interval=20, ping_timeout=30,
@@ -98,7 +188,13 @@ class DesktopAgent:
                 if reply != {'type': 'auth_ok', 'name': self.config['name']}:
                     return
                 await ws.send(json.dumps({'type': 'desktop', 'ticket': ticket}))
-                await ws.send(header)
+                if managed:
+                    pending = await asyncio.wait_for(managed_browser_handshake(ws), 10)
+                    if pending:
+                        writer.write(pending)
+                        await writer.drain()
+                else:
+                    await ws.send(header)
 
                 async def to_gateway():
                     while True:
