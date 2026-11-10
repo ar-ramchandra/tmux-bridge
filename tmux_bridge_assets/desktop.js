@@ -87,6 +87,7 @@ function build(){
   for(const [label,key] of [['Esc','Escape'],['Tab','Tab'],['←','ArrowLeft'],['↑','ArrowUp'],['↓','ArrowDown'],['→','ArrowRight'],['⌫','Backspace'],['Enter','Enter']]){const button=make('button','',label);button.type='button';button.setAttribute('aria-label',key);keyboardAction(button,()=>{if(connected)viewer.sendKey(keysyms[key],key);});keys.append(button);}
   dialog.append(header,status,form,screen,input,keys);document.body.append(dialog);
   dialog.addEventListener('cancel',e=>{e.preventDefault();closeDesktop();});
+  dialog.addEventListener('close',()=>{if(!dialog.open)closeDesktop();});
 }
 async function openDesktop(server){
   if(!server)return;

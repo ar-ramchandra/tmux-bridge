@@ -11,7 +11,7 @@ if(!server||!/^[a-z][a-z0-9-]{0,47}$/.test(server))throw new Error('Set BRIDGE_S
    const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
    const errors=[];page.on('pageerror',e=>errors.push(e.message));
    for(let attempt=0;attempt<3;attempt++){
-    await page.goto(base,{waitUntil:'domcontentloaded'});await page.waitForFunction(()=>!!window.bridgeDesktop);
+    await page.goto(base,{waitUntil:'domcontentloaded'});await page.waitForFunction(()=>!!window.bridgeDesktop&&typeof onServer!=='undefined'&&onServer);
     await page.evaluate(server=>window.bridgeDesktop.open(server),server);
     try{
      await page.waitForFunction(()=>document.querySelector('#desktop-status')?.textContent==='Connected · Swipe to pan · Tap to click · Two fingers to scroll',{},{timeout:25000});

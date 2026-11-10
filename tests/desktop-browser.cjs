@@ -14,7 +14,7 @@ const source=fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/desktop.
     export default class RFB extends EventTarget {
      constructor(){super();this.sent=[];window.rfb=this;}
      sendCredentials(value){this.sent.push({...value});}
-     disconnect(){this.dispatchEvent(new Event('disconnect'));}
+     disconnect(){this.disconnected=true;this.dispatchEvent(new Event('disconnect'));}
     }`});
    if(u.pathname.startsWith('/api/'))return r.fulfill({json:{available:true}});
    return r.fulfill({contentType:'text/html',body:`<div id="welcome-item"></div>
@@ -67,6 +67,9 @@ const source=fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/desktop.
   await page.reload();await open('temporary');await event('credentialsrequired');
   assert.deepEqual(await page.evaluate(()=>rfb.sent),[]);
   console.log('PASS opting out prevents persistence');
+  await page.evaluate(()=>document.querySelector('#desktop-dialog').close());
+  await page.waitForFunction(()=>rfb.disconnected);
+  console.log('PASS closing the dialog from navigation releases the desktop stream');
   await open('no-storage');await event('credentialsrequired');
   await page.evaluate(()=>{Object.defineProperty(IDBFactory.prototype,'open',{value:()=>{throw new Error('Storage blocked');},configurable:true});});
   await signIn();
