@@ -68,7 +68,7 @@ const source=fs.readFileSync(path.join(__dirname,'../tmux_bridge_assets/desktop.
   assert.deepEqual(await page.evaluate(()=>rfb.sent),[]);
   console.log('PASS opting out prevents persistence');
   await open('no-storage');await event('credentialsrequired');
-  await page.evaluate(()=>{indexedDB.open=()=>{throw new Error('Storage blocked');};});
+  await page.evaluate(()=>{Object.defineProperty(IDBFactory.prototype,'open',{value:()=>{throw new Error('Storage blocked');},configurable:true});});
   await signIn();
   await page.evaluate(()=>rfb.dispatchEvent(new Event('connect')));
   await page.getByRole('status').filter({hasText:'could not save your sign-in'}).waitFor();

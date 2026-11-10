@@ -56,7 +56,7 @@ sockets.on('connection',socket=>{
    else if(stage==='init'){
     if(!take(1))return;
     const name=Buffer.from('Bridge test desktop'),init=Buffer.alloc(24+name.length);
-    init.writeUInt16BE(80,0);init.writeUInt16BE(60,2);Buffer.from([32,24,0,1,0,255,0,255,0,255,16,8,0,0,0,0]).copy(init,4);init.writeUInt32BE(name.length,20);name.copy(init,24);socket.send(init);stage='ready';
+    init.writeUInt16BE(1600,0);init.writeUInt16BE(1000,2);Buffer.from([32,24,0,1,0,255,0,255,0,255,16,8,0,0,0,0]).copy(init,4);init.writeUInt32BE(name.length,20);name.copy(init,24);socket.send(init);stage='ready';
    }else{
     const type=pending[0];let length;
     if(type===0)length=20;
@@ -69,13 +69,13 @@ sockets.on('connection',socket=>{
     const message=take(length);if(!message)return;
     if(type===0)pixelFormat=message.subarray(4);
     if(type===3&&!sentFrame){
-     sentFrame=true;const frame=Buffer.alloc(16+80*60*4);frame[3]=1;frame.writeUInt16BE(80,8);frame.writeUInt16BE(60,10);
+     sentFrame=true;const frame=Buffer.alloc(16+1600*1000*4);frame[3]=1;frame.writeUInt16BE(1600,8);frame.writeUInt16BE(1000,10);
      const pixel=(180<<pixelFormat[10])|(90<<pixelFormat[11])|(40<<pixelFormat[12]);
      for(let i=16;i<frame.length;i+=4){if(pixelFormat[2])frame.writeUInt32BE(pixel>>>0,i);else frame.writeUInt32LE(pixel>>>0,i);}
      socket.send(frame);
     }
     if(type===4)events.push({key:message.readUInt32BE(4),down:message[1]});
-    if(type===5)events.push({pointer:true,buttons:message[1]});
+    if(type===5)events.push({pointer:true,buttons:message[1],x:message.readUInt16BE(2),y:message.readUInt16BE(4)});
    }
   }
  });
@@ -88,7 +88,7 @@ sockets.on('connection',socket=>{
  try{
   let page=await browser.newPage();const errors=[];
   const url='http://127.0.0.1:'+server.address().port;
-  const ready=async()=>{await page.waitForFunction(()=>document.querySelector('#desktop-status').textContent==='Connected · Tap to click; use Keyboard to type.');assert.equal(await page.locator('form').evaluate(e=>e.hidden),true);};
+  const ready=async()=>{await page.waitForFunction(()=>document.querySelector('#desktop-status').textContent==='Connected · Swipe to pan · Tap to click · Two fingers to scroll');assert.equal(await page.locator('form').evaluate(e=>e.hidden),true);};
   page.on('pageerror',e=>errors.push(e.message));
   await page.goto('http://127.0.0.1:'+server.address().port);
   await page.getByRole('button',{name:'Desktop',exact:true}).click();
@@ -98,13 +98,44 @@ sockets.on('connection',socket=>{
   await page.getByRole('button',{name:'Sign in',exact:true}).click();
   await ready();
   assert.equal(await page.getByLabel('Desktop password',{exact:true}).inputValue(),'');
-  await page.waitForFunction(()=>{const canvas=document.querySelector('#desktop-screen canvas');return canvas&&canvas.width===80&&canvas.height===60&&canvas.getContext('2d').getImageData(20,20,1,1).data[0]===180;});
+  await page.waitForFunction(()=>{const canvas=document.querySelector('#desktop-screen canvas');return canvas&&canvas.width===390&&canvas.height>500&&canvas.getContext('2d').getImageData(20,20,1,1).data[0]===180;});
   await page.locator('#desktop-screen canvas').tap();
+  for(let i=0;i<50&&!events.some(e=>e.pointer&&e.buttons===1);i++)await page.waitForTimeout(20);
+  const beforePan=events.filter(e=>e.pointer&&e.buttons===1).at(-1);
+  // Exercise noVNC's actual touch gesture handling, not private viewport fields.
+  const drag=async(count)=>page.locator('#desktop-screen canvas').evaluate((canvas,count)=>{
+   const box=canvas.getBoundingClientRect();
+   const send=(type,x)=>{const touches=Array.from({length:count},(_,i)=>({identifier:i,target:canvas,clientX:box.x+x+i*20,clientY:box.y+180+i*20}));const event=new Event(type,{bubbles:true,cancelable:true});Object.defineProperties(event,{touches:{value:type==='touchend'?[]:touches},changedTouches:{value:touches}});canvas.dispatchEvent(event);};
+   send('touchstart',280);send('touchmove',220);send('touchmove',120);send('touchend',120);
+  },count);
+  const clicks=events.filter(e=>e.pointer&&e.buttons===1).length;
+  await drag(1);await page.waitForTimeout(100);
+  assert.equal(events.filter(e=>e.pointer&&e.buttons===1).length,clicks,'panning must not drag remote windows');
+  await page.locator('#desktop-screen canvas').tap();await page.waitForTimeout(100);
+  const afterPan=events.filter(e=>e.pointer&&e.buttons===1).at(-1);
+  assert(afterPan.x>beforePan.x+80,'tap coordinates follow the panned viewport');
+  await drag(2);await page.waitForTimeout(100);
+  assert(events.some(e=>e.pointer&&(e.buttons&0x60)),'two-finger horizontal scroll reaches the remote desktop');
+  await page.getByRole('button',{name:'Overview',exact:true}).tap();
+  await page.waitForFunction(()=>document.querySelector('#desktop-screen canvas').width===1600);
+  assert((await page.locator('#desktop-screen canvas').boundingBox()).width<=390);
+  await page.getByRole('button',{name:'Overview',exact:true}).tap();
+  await page.waitForFunction(()=>document.querySelector('#desktop-screen canvas').width===390);
   await page.getByRole('button',{name:'Keyboard',exact:true}).tap();
+  await page.locator('#desktop-screen canvas').tap();
+  assert.equal(await page.locator('#desktop-keyboard').evaluate(e=>e===document.activeElement),true,'desktop tap retains phone keyboard focus');
   await page.keyboard.type('a');
   await page.getByRole('button',{name:'Enter',exact:true}).tap();
   for(let i=0;i<50&&!events.some(e=>e.key===0xff0d);i++)await page.waitForTimeout(20);
   assert(events.some(e=>e.key===97&&e.down===1));assert(events.some(e=>e.key===0xff0d&&e.down===1));assert(events.some(e=>e.pointer&&e.buttons===1));
+  assert.equal(events.filter(e=>e.key===0xff0d&&e.down===1).length,1,'one tap sends Enter once');
+  await page.setViewportSize({width:390,height:500});
+  await page.waitForFunction(()=>document.querySelector('#desktop-dialog').getBoundingClientRect().height<=500);
+  const keyboardRow=await page.locator('.desktop-keys').boundingBox();
+  assert(keyboardRow.y+keyboardRow.height<=500,'accessory keys fit above the reduced viewport');
+  await page.setViewportSize({width:390,height:844});
+  await page.getByRole('button',{name:'Keyboard',exact:true}).tap();
+  assert.equal(await page.locator('.desktop-keys').isVisible(),false);
   await page.getByRole('button',{name:'Close',exact:true}).tap();
   for(let i=0;i<50&&sockets.clients.size;i++)await page.waitForTimeout(20);
   assert.equal(sockets.clients.size,0);assert.deepEqual(errors,[]);
