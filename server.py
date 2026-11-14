@@ -696,7 +696,14 @@ class ServerAgent:
         self.config = config
         self.gateway_url = config["gateway"]
         self.name = config["name"]
-        self.manager = SessionManager(self._channel_exited)
+        self.backend = config.get("backend", "tmux")
+        if self.backend == "cmux":
+            from cmux_backend import CmuxManager
+            self.manager = CmuxManager(config, self._channel_exited)
+        elif self.backend == "tmux":
+            self.manager = SessionManager(self._channel_exited)
+        else:
+            raise ValueError("backend must be tmux or cmux")
         self.ws = None
         self._running = True
 
@@ -757,7 +764,7 @@ class ServerAgent:
             print(f"[SERVER] Authenticated as '{self.name}'", flush=True)
 
             # Register with current session list
-            sessions = self.manager.list_sessions()
+            sessions = await self._list_sessions()
             await ws.send(make_register(self.name, sessions))
             self._registered = True
 
@@ -820,7 +827,13 @@ class ServerAgent:
             except Exception:
                 pass
 
-        sess = await self.manager.open_channel(channel, session, send_cb, cols, rows)
+        try:
+            sess = await self.manager.open_channel(channel, session, send_cb, cols, rows)
+        except Exception as exc:
+            print(f"[SERVER] Attachment failed: {exc}", flush=True)
+            await ws.send(json.dumps({"type": MSG_CHANNEL_CLOSED, "channel": channel,
+                                      "reason": str(exc)}))
+            return
         if sess:
             # Send replay buffer
             replay = sess.get_replay()
@@ -830,7 +843,7 @@ class ServerAgent:
         else:
             # Session doesn't exist
             await ws.send(json.dumps({"type": MSG_CHANNEL_CLOSED, "channel": channel,
-                                      "reason": "Session unavailable. Waiting for tmux recovery."}))
+                                      "reason": "Session unavailable. Waiting for terminal recovery."}))
 
     async def _channel_exited(self, channel):
         if self.ws:
@@ -859,7 +872,9 @@ class ServerAgent:
         body = msg.get("body", {})
 
         # Route to handler
-        if path == "/api/sessions" and method == "GET":
+        if self.backend == "cmux" and (path.startswith(("/api/cmux/", "/api/sessions", "/api/history")) or path == "/api/scroll"):
+            result = await self.manager.rpc(method, path, body)
+        elif path == "/api/sessions" and method == "GET":
             result = _rpc_list_sessions(self.manager)
         elif path == "/api/history" and method == "GET":
             result = await asyncio.get_running_loop().run_in_executor(None, _rpc_history, body or {})
@@ -875,6 +890,7 @@ class ServerAgent:
             result = _rpc_kill_session(name, self.manager)
         elif path == "/api/specs" and method == "GET":
             result = _rpc_specs()
+            result["body"]["backend"] = self.backend
         elif path == "/api/files" and method == "GET":
             file_path = body.get("path", "~") if body else "~"
             result = _rpc_files(file_path)
@@ -887,12 +903,21 @@ class ServerAgent:
 
         await ws.send(make_rpc_response(req_id, result["status"], result["body"]))
 
+    async def _list_sessions(self):
+        if self.backend == "cmux":
+            return await self.manager.refresh()
+        return self.manager.list_sessions()
+
     async def _session_update_loop(self, ws):
         """Periodically send session list updates to gateway."""
         prev_sessions = None
         while True:
             await asyncio.sleep(SESSION_POLL_INTERVAL)
-            sessions = self.manager.list_sessions()
+            try:
+                sessions = await self._list_sessions()
+            except Exception as exc:
+                print(f"[SERVER] Session discovery: {exc}", flush=True)
+                continue
             # Only send if changed
             if sessions != prev_sessions:
                 try:
@@ -907,13 +932,17 @@ class ServerAgent:
             asyncio.create_task(self.ws.close())
 
 
-async def main():
+async def main(backend=None, cmux_socket=None):
     if not CONFIG_FILE.exists():
         print("Error: No config found. Enroll this server first.", flush=True)
         print("  Run the enrollment command from the gateway.", flush=True)
         return
 
     config = load_config()
+    if backend is not None:
+        config["backend"] = backend
+    if cmux_socket is not None:
+        config["cmux_socket"] = cmux_socket
     agent = ServerAgent(config)
 
     # Handle graceful shutdown

@@ -17,6 +17,7 @@ Each machine runs an agent that connects outward to your gateway. Open the brows
 - One-time node enrollment with signed application credentials.
 - Optional private-CA mTLS transport and per-node Cloudflare installer bundles for an explicitly configured deployment.
 - Linux and macOS support; no Windows agent in this release.
+- Experimental [native cmux backend](docs/cmux.md) for Mac workspace management and terminal screen viewing and keyboard control.
 
 ## Try it locally
 

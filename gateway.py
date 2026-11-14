@@ -179,6 +179,26 @@ class ProxySession:
         self.buffer = deque(maxlen=100000)
         self._closing = False
         self._channel_open = False
+        self.native_frame = None
+        self._native_task = None
+
+    def receive_native_frame(self, frame):
+        # Native snapshots are replaceable. Keep one latest frame, including
+        # while slow viewers are writing, instead of buffering every repaint.
+        self.native_frame = json.dumps({k: frame[k] for k in ('type', 'cols', 'rows', 'data')})
+        if self._native_task is None or self._native_task.done():
+            self._native_task = asyncio.create_task(self._flush_native_frames())
+
+    async def _flush_native_frames(self):
+        previous = None
+        while self.native_frame is not None and self.native_frame != previous:
+            previous = self.native_frame
+            async def send(ws):
+                try:
+                    await asyncio.wait_for(ws.send_text(previous), timeout=1)
+                except Exception:
+                    await self.remove_viewer(ws)
+            await asyncio.gather(*(send(ws) for ws in list(self.viewers)))
 
     async def ensure_channel(self, cols: int = 120, rows: int = 40):
         """Ask server to open a terminal channel for this session."""
@@ -326,6 +346,7 @@ class ProxySession:
             await self.server_conn.send_text(make_disconnect(self.channel))
         self._channel_open = False
         self.channel = None
+        self.native_frame = None
         self._closing = False
 
     def notify_server_disconnected(self):
@@ -333,6 +354,7 @@ class ProxySession:
         self._channel_open = False
         self.channel = None
         self.buffer.clear()
+        self.native_frame = None
         asyncio.create_task(self._close_viewers(list(self.viewers), "Server connection lost. Reconnecting…"))
 
     async def terminal_ended(self, reason):
@@ -340,6 +362,7 @@ class ProxySession:
         self._channel_open = False
         self.channel = None
         self.buffer.clear()
+        self.native_frame = None
         await self._close_viewers(list(self.viewers), reason)
 
     async def _close_viewers(self, viewers, reason):
@@ -602,7 +625,25 @@ async def proxy_sessions(server: str):
             ps = gw_manager.proxy_sessions.get(key)
             if ps and ps.viewers:
                 s["viewers"] = ps.get_viewers_info()
-    return JSONResponse(sessions)
+    return JSONResponse(sessions, status_code=result.get("status", 200))
+
+
+@app.get("/api/{server}/cmux/workspaces")
+async def proxy_cmux_workspaces(server: str):
+    return await _rpc_to_server(server, "GET", "/api/cmux/workspaces")
+
+
+@app.post("/api/{server}/cmux/{action}")
+async def proxy_cmux_action(server: str, action: str, request: Request):
+    if action not in {"create", "select", "close", "split"}:
+        return JSONResponse({"error": "Unknown cmux action"}, status_code=404)
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError()
+    except ValueError:
+        return JSONResponse({"error": "Expected a JSON object"}, status_code=400)
+    return await _rpc_to_server(server, "POST", "/api/cmux/" + action, body)
 
 
 # tmux started by a service may pass a minimal PATH to non-login commands.
@@ -726,6 +767,11 @@ async def server_ws(websocket: WebSocket):
                     conn.resolve_rpc(msg["id"], msg["status"], msg["body"])
                 elif msg_type == MSG_SESSION_UPDATE:
                     conn.sessions = msg.get("sessions", [])
+                elif msg_type == "native_frame":
+                    for ps in gw_manager.proxy_sessions.values():
+                        if ps.server_conn is conn and ps.channel == msg.get("channel"):
+                            ps.receive_native_frame(msg)
+                            break
                 elif msg_type == 'activity_events':
                     # One bounded metadata job per connection. Never hold the
                     # terminal receive loop on SQLite or notification work.
@@ -915,6 +961,8 @@ async def proxy_terminal_ws(websocket: WebSocket, server: str, session: str):
     )
 
     replay = await proxy.add_viewer(websocket, info)
+    if proxy.native_frame:
+        await websocket.send_text(proxy.native_frame)
     if replay:
         await websocket.send_bytes(replay)
     info.ready = True
@@ -2029,6 +2077,17 @@ HTML = r"""<!DOCTYPE html>
   </div>
   <div id="welcome-viewers"></div>
   <div class="category-label"><span class="cat-text">Sessions</span><button class="cat-add" title="New Claude session" onclick="newClaudeSession()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button><button class="cat-add" title="New dir" onclick="addProject()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div>
+  <details id="cmux-controls" hidden style="padding:8px">
+    <summary>cmux workspaces</summary>
+    <label>Mac window <select id="cmux-window" aria-label="Mac window"></select></label>
+    <button onclick="createCmuxWorkspace()">New workspace</button>
+    <label>Workspace <select id="cmux-workspace" aria-label="cmux workspace"></select></label>
+    <button onclick="selectCmuxWorkspace()">Show on Mac</button>
+    <button onclick="closeCmuxWorkspace()">Close workspace…</button>
+    <label>Split <select id="cmux-direction" aria-label="Split direction"><option>right</option><option>down</option><option>left</option><option>up</option></select></label>
+    <button onclick="splitCmuxTerminal()">Split current terminal</button>
+    <p>Screen preview · terminal text and colors · use History for scrollback</p>
+  </details>
   <div id="session-list"></div>
   <div id="bottom-panel">
     <div id="conn-header">
@@ -2417,6 +2476,7 @@ function renderHomeSidebar() {
 
 function enterServer(serverName) {
   closeConnection();
+  document.getElementById('cmux-controls').hidden=true;
   currentSession = '';
   currentServer = serverName;
   renderTerminalTabs();
@@ -3616,7 +3676,7 @@ function renderTerminalTabs(){
     button.setAttribute('role','tab');button.setAttribute('aria-selected',String(active));button.setAttribute('aria-controls','terminal-container');
     button.setAttribute('aria-label',tab.session+' on '+tab.server);button.tabIndex=active||(!currentSession&&index===0)?0:-1;
     button.title=tab.server+' / '+tab.session+' · Alt+Shift+←/→ to switch';
-    const name=document.createElement('span');name.className='terminal-tab-name';name.textContent=tab.session;
+    const name=document.createElement('span');name.className='terminal-tab-name';name.textContent=sessionLabel(tab.session,tab.server);
     const server=document.createElement('span');server.className='terminal-tab-server';server.textContent=tab.server;button.append(name,server);
     button.addEventListener('click',()=>activateTerminalTab(tab));
     button.addEventListener('keydown',e=>{
@@ -3856,6 +3916,7 @@ async function _loadLayout() {
 }
 
 async function newClaudeSession() {
+  if(!document.getElementById('cmux-controls').hidden){await createCmuxWorkspace();return;}
   const server=currentServer;
   const name = prompt('Session name:');
   if (!name || !name.trim()) return;
@@ -3894,7 +3955,7 @@ async function checkedRequest(url,options){
 }
 async function killSession(name){
  const server=currentServer;
- if(!confirm('Kill session "'+name+'" and stop its running programs?'))return;
+ if(!confirm('Close terminal "'+sessionLabel(name)+'" and stop its running programs?'))return;
  try{
   await checkedRequest('/api/'+encodeURIComponent(server)+'/sessions/'+encodeURIComponent(name),{method:'DELETE'});
   closeTerminalTab({server,session:name});
@@ -4037,10 +4098,12 @@ function renderSidebar() {
     div.className = 'session-item' + (s.name === currentSession ? ' active' : '');
     div.dataset.session = s.name;
     div.draggable = true;
-    div.innerHTML = '<span class="hash">#</span><span class="s-name">' + s.name +
+    div.innerHTML = '<span class="hash">#</span><span class="s-name">' +
       '</span><span class="s-actions">' +
       '<button class="s-btn s-move" title="Move to dir">' + moveSvg + '</button>' +
       '<button class="s-btn s-close" title="Kill session">' + closeSvg + '</button></span>';
+    div.querySelector('.s-name').textContent = s.label || s.name;
+    div.querySelector('.s-close').title = s.backend === 'cmux' ? 'Close terminal pane' : 'Kill session';
     window.bridgeActivity?.decorateItem(div, currentServer, s.name);
     div.querySelector('.s-name').addEventListener('click', () => {
       connect(s.name); closeSidebar();
@@ -4256,6 +4319,66 @@ function renderSidebar() {
   });
 }
 
+async function cmuxAction(action, body, server=currentServer) {
+  return checkedRequest('/api/'+encodeURIComponent(server)+'/cmux/'+action,
+    {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+}
+function sessionLabel(name,server=currentServer){
+  return (server===currentServer && cachedSessions.find(s=>s.name===name)?.label)||name;
+}
+async function loadCmuxControls(server) {
+  const panel=document.getElementById('cmux-controls');
+  try {
+    const r=await fetch('/api/'+encodeURIComponent(server)+'/cmux/workspaces');
+    const data=await r.json();
+    if(server!==currentServer)return;
+    if(!r.ok || data.backend!=='cmux'){panel.hidden=true;return;}
+    panel.hidden=false;
+    for(const [id,items] of [['cmux-window',data.windows],['cmux-workspace',data.workspaces]]){
+      const select=document.getElementById(id),old=select.value;select.replaceChildren();
+      for(const item of items){const option=document.createElement('option');option.value=item.id;option.textContent=item.title||item.id;select.appendChild(option);}
+      if(Array.from(select.options).some(o=>o.value===old))select.value=old;
+    }
+  }catch(e){if(server===currentServer)panel.hidden=true;}
+}
+async function createCmuxWorkspace(){
+  const server=currentServer,title=prompt('New cmux workspace name:');if(!title?.trim())return;
+  try{
+    const result=await cmuxAction('create',{title:title.trim(),window_id:document.getElementById('cmux-window').value,operation_id:crypto.randomUUID()},server);
+    if(server!==currentServer)return;
+    await loadSessions();
+    const session=cachedSessions.find(s=>s.workspace_id===result.workspace_id?.toLowerCase());
+    if(session)connect(session.name);
+  }catch(e){notifyUser('Workspace creation could not be confirmed: '+e.message+'. Refresh before retrying.');}
+}
+async function selectCmuxWorkspace(){
+  try{await cmuxAction('select',{workspace_id:document.getElementById('cmux-workspace').value});}
+  catch(e){notifyUser(e.message);}
+}
+async function closeCmuxWorkspace(){
+  const server=currentServer,select=document.getElementById('cmux-workspace'),id=select.value;
+  if(!id || !confirm('Close workspace "'+select.selectedOptions[0].textContent+'" and stop ALL its terminals and programs?'))return;
+  try{
+    await cmuxAction('close',{workspace_id:id,confirmed:true},server);
+    if(server!==currentServer)return;
+    const closing=cachedSessions.filter(s=>s.workspace_id===id);
+    closing.forEach(s=>closeTerminalTab({server,session:s.name}));
+    if(closing.some(s=>s.name===currentSession))disconnectSession();
+    await loadSessions();
+  }catch(e){notifyUser('Workspace was not closed: '+e.message);}
+}
+async function splitCmuxTerminal(){
+  const server=currentServer,session=currentSession;
+  if(!cachedSessions.some(s=>s.name===session && s.backend==='cmux')){notifyUser('Open a cmux terminal first.');return;}
+  try{
+    const result=await cmuxAction('split',{session,direction:document.getElementById('cmux-direction').value},server);
+    if(server!==currentServer)return;
+    await loadSessions();
+    const created=cachedSessions.find(s=>s.surface_id===result.surface_id?.toLowerCase());
+    if(created)connect(created.name);
+  }catch(e){notifyUser('Split could not be confirmed: '+e.message+'. Refresh before retrying.');}
+}
+
 async function loadSessions() {
   const server=currentServer;
   if (!server) return [];
@@ -4279,11 +4402,13 @@ async function loadSessions() {
       }
     });
     renderSidebar();
+    await loadCmuxControls(server);
     return cachedSessions;
   } catch(e) { return []; }
 }
 
 function closeConnection() {
+  pendingNativeFrame=null;
   clearInputClaim();
   if(currentServer && currentSession)terminalTabScroll.set(terminalTabKey(currentServer,currentSession),term.buffer.active.baseY-term.buffer.active.viewportY);
   clearTimeout(reconnectTimer); reconnectTimer=null;
@@ -4298,7 +4423,7 @@ function connect(session) {
   closeConnection();currentSession=session;isMuted=false;
   rememberTerminalTab();
   document.getElementById('mic-btn').classList.remove('barred');
-  hideServerLanding();chanTitle.textContent=session||'—';
+  hideServerLanding();chanTitle.textContent=sessionLabel(session)||'—';
   term.reset();fitAddon.fit();
   openSessionSocket(currentServer,session,terminalTabScroll.get(terminalTabKey(currentServer,session))||0);
   // Desktop navigation should leave normal typing in the terminal. Touch
@@ -4311,6 +4436,7 @@ function reconnect(session) {
   openSessionSocket(currentServer,session,distance);
 }
 function openSessionSocket(server,session,distance) {
+  pendingNativeFrame=null;
   clearInputClaim();
   clearTimeout(reconnectTimer);reconnectTimer=null;
   const old=ws;if(old){old.onclose=null;old.onmessage=null;old.close();}
@@ -4343,6 +4469,12 @@ function handleMessage(e) {
   } else {
     try {
       const msg = JSON.parse(e.data);
+      if(msg.type==='native_frame'){
+        if(!Number.isInteger(msg.cols)||!Number.isInteger(msg.rows)||msg.cols<1||msg.cols>500||msg.rows<1||msg.rows>200||typeof msg.data!=='string'||msg.data.length>1500000)return;
+        pendingNativeFrame=msg;
+        flushNativeFrame();
+        return;
+      }
       if (msg.type === 'presence') {
         const me = (msg.sessions[currentSession]?.viewers || []).find(v => v.id === clientId);
         hasInput = !!me?.active && !isMuted;
@@ -4396,8 +4528,18 @@ term.onBinary(data => {
   if (canSend()) ws.send(Uint8Array.from(data, ch => ch.charCodeAt(0) & 255));
 });
 
+let applyingNativeFrame=false;
+let nativeFrameBusy=false,pendingNativeFrame=null;
+function flushNativeFrame(){
+  if(nativeFrameBusy || !pendingNativeFrame)return;
+  const frame=pendingNativeFrame;pendingNativeFrame=null;
+  const bytes=Uint8Array.from(atob(frame.data),c=>c.charCodeAt(0));
+  nativeFrameBusy=true;applyingNativeFrame=true;
+  try{term.resize(frame.cols,frame.rows);}finally{applyingNativeFrame=false;}
+  term.write(bytes,()=>{nativeFrameBusy=false;flushNativeFrame();});
+}
 term.onResize(({cols, rows}) => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (!applyingNativeFrame && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({type: 'resize', cols, rows}));
   }
 });
