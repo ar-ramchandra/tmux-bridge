@@ -95,6 +95,10 @@ is required. The node's existing own-certificate transport and signed identity
 are reused. Bulk traffic uses separate outbound connections, keeping it off
 the terminal control stream.
 
+Before rolling back to a gateway version without preview support, remove the
+preview tunnel ingress route first and verify preview requests are denied.
+Otherwise an older gateway could serve its control UI on a preview hostname.
+
 ## Boundaries and limits
 
 - Only an explicitly registered `127.0.0.1` HTTP port is dialed. There is no URL,
