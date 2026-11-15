@@ -44,6 +44,7 @@ import cloudflare
 from browser_security import BrowserOriginMiddleware
 from activity_gateway import ActivityGateway
 from desktop_gateway import DesktopGateway
+from preview_gateway import PreviewGateway, PreviewOriginMiddleware
 from power import WakeController
 from account_usage import ensure_table as ensure_usage_table, store_snapshot as store_account_usage, snapshots as account_snapshots
 
@@ -406,6 +407,7 @@ class GatewayManager:
 
     async def unregister_server(self, server_name: str):
         await desktop_gateway.close_node(server_name)
+        await preview_gateway.close_node(server_name)
         conn = self.server_connections.pop(server_name, None)
         if conn:
             conn._active = False
@@ -484,17 +486,25 @@ class GatewayManager:
 gw_manager = GatewayManager()
 desktop_gateway = DesktopGateway(gw_manager.get_server)
 app.include_router(desktop_gateway.router)
+preview_gateway = PreviewGateway(gw_manager.get_server, LAYOUT_FILE.parent)
+app.include_router(preview_gateway.router)
+app.add_middleware(PreviewOriginMiddleware, previews=preview_gateway)
 
 
 @app.on_event("startup")
 async def startup():
     await gw_manager.start()
+    app.state.preview_worker = asyncio.create_task(preview_gateway.worker())
     asyncio.create_task(_auto_start_cloudflared())
     app.state.activity_worker = asyncio.create_task(activity_gateway.worker())
 
 
 @app.on_event("shutdown")
 async def stop_activity():
+    preview_task = getattr(app.state, 'preview_worker', None)
+    if preview_task:
+        preview_task.cancel()
+        await asyncio.gather(preview_task, return_exceptions=True)
     task = getattr(app.state, 'activity_worker', None)
     if task:
         task.cancel()
@@ -746,6 +756,9 @@ async def server_ws(websocket: WebSocket):
         # Wait for register message
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=10)
         msg = json.loads(raw)
+        if msg.get('type') == 'preview':
+            await preview_gateway.accept_agent(websocket, server_name, msg.get('ticket'))
+            return
         if msg.get('type') == 'desktop':
             await desktop_gateway.accept_agent(websocket, server_name, msg.get('ticket'))
             return
@@ -781,6 +794,8 @@ async def server_ws(websocket: WebSocket):
                     conn.resolve_rpc(msg["id"], msg["status"], msg["body"])
                 elif msg_type == MSG_SESSION_UPDATE:
                     conn.sessions = msg.get("sessions", [])
+                elif msg_type == 'previews':
+                    preview_gateway.update(server_name, msg.get('items'))
                 elif msg_type == 'account_usage':
                     if not getattr(conn, '_usage_task', None) or conn._usage_task.done():
                         async def accept_usage(snapshot, identity=server_name):
@@ -2997,6 +3012,7 @@ function openTerminalLink(event, value) {
   if(!url){notifyUser('Only web links can be opened here.');return;}
   event.preventDefault();
   if(displayPointer)displayPointer.opened=true;
+  if(window.bridgePreviews?.openLocal(url))return;
   window.open(url,'_blank','noopener,noreferrer');
 }
 function openPlainTerminalLink(event) {
@@ -4576,6 +4592,7 @@ setInterval(() => { if (onServer && currentServer) loadSessions(); }, 15000);
 <script src="/activity.js"></script>
 <script src="/accounts.js"></script>
 <script type="module" src="/desktop.js"></script>
+<script type="module" src="/previews.js"></script>
 </body>
 </html>"""
 

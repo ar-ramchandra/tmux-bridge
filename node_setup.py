@@ -23,7 +23,7 @@ from node_install import NAME_RE, PAYLOAD
 import transport_pki
 
 SOURCE=Path(__file__).resolve().parent
-REQUIREMENTS='websockets==15.0.1\ncryptography==46.0.7\npsutil==7.2.2\n'
+REQUIREMENTS='websockets==15.0.1\ncryptography==46.0.7\npsutil==7.2.2\nhttpx==0.28.1\n'
 VERSION='2026.9.1'
 # Published digests from Cloudflare's release API, checked when this installer was added.
 ASSET_DIGESTS={
@@ -195,7 +195,8 @@ def create_bundle(name,root=None,output=None,port=14603,api=None):
                 allowed_path=root/'transport/allowed-clients.json'
                 allowed=json.loads(allowed_path.read_text());allowed[state['fingerprint']]=name
                 save_json(allowed_path,allowed)
-                files={f:(SOURCE/f).read_bytes() for f in ('server.py','protocol.py','auth.py','sysinfo.py','node_runtime.py','activity.py','integrations.py','account_usage.py','desktop_agent.py')}
+                files={f:(SOURCE/f).read_bytes() for f in ('server.py','protocol.py','auth.py','sysinfo.py','node_runtime.py','activity.py','integrations.py','account_usage.py','desktop_agent.py','preview_agent.py','preview_registry.py','preview_mcp.py')}
+                files['previews.json'] = (root/'previews.json').read_bytes() if (root/'previews.json').is_file() else b'{"enabled":false}'
                 files.update({'server.key':key,'server.crt':cert,'ca.crt':ca,
                     'tls.key':(directory/'tls/tls.key').read_bytes(),
                     'tls.crt':(directory/'tls/tls.crt').read_bytes(),

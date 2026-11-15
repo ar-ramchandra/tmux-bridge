@@ -26,6 +26,7 @@ import websockets
 from activity import forward_activity, acknowledge_activity
 from account_usage import collect as collect_accounts, sanitized_snapshot, POLL_SECONDS, start_login
 from desktop_agent import DesktopAgent
+from preview_agent import PreviewAgent
 from websockets.exceptions import ConnectionClosedError
 
 from protocol import (
@@ -718,6 +719,7 @@ class ServerAgent:
         self._running = True
         self._login_rpc_task = None
         self.desktop = DesktopAgent(CONFIG_DIR, config, websocket_tls_options)
+        self.previews = PreviewAgent(CONFIG_DIR, config, websocket_tls_options)
 
     async def run(self):
         """Main entry point — starts metrics, session manager, and connects."""
@@ -780,6 +782,7 @@ class ServerAgent:
             sessions = self.manager.list_sessions()
             await ws.send(make_register(self.name, sessions))
             self._registered = True
+            await self.previews.announce(ws)
 
             # Start session update poller
             update_task = asyncio.create_task(self._session_update_loop(ws))
@@ -792,6 +795,7 @@ class ServerAgent:
                 activity_task.cancel()
                 await asyncio.gather(activity_task, return_exceptions=True)
                 await self.desktop.stop()
+                await self.previews.stop()
                 await self.manager.stop_all()
                 self.ws = None
 
@@ -817,7 +821,9 @@ class ServerAgent:
                 elif msg_type == MSG_RESIZE:
                     self._handle_resize(msg)
                 elif msg_type == MSG_RPC_REQUEST:
-                    if msg.get('path') in ('/api/desktop', '/api/desktop/connect'):
+                    if msg.get('path', '').startswith('/api/previews'):
+                        await self.previews.request(ws, msg)
+                    elif msg.get('path') in ('/api/desktop', '/api/desktop/connect'):
                         await self.desktop.request(ws, msg)
                     elif msg.get('path') == '/api/account-login':
                         if self._login_rpc_task and not self._login_rpc_task.done():
@@ -939,6 +945,7 @@ class ServerAgent:
                 except Exception:
                     break
                 prev_sessions = sessions
+            await self.previews.announce(ws)
 
     def stop(self):
         self._running = False
