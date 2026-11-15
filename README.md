@@ -103,3 +103,11 @@ Provider hooks can show prompt status in the session list, notify browsers and
 phones, and expose read-only completion events to connected agents through MCP.
 See [setup and notification settings](docs/activity.md). You retain direct control
 of each terminal; response completion does not imply the whole goal is verified.
+
+### Private web previews
+
+Open a node’s localhost web app from your phone or computer through the existing
+authenticated gateway. Click its terminal link, or enter its port under **Previews**.
+Each preview has an isolated origin, an expiry, and a Stop control. Agents can
+create and revoke previews with the CLI or session-scoped MCP tools.
+See [preview setup and security boundaries](docs/previews.md).
