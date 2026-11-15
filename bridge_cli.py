@@ -116,7 +116,9 @@ def main(argv=None):
     revoke.add_argument('--transport-dir', help='Transport administration directory (defaults to --config-dir)')
     pair = commands.add_parser('pair', help='Pair this machine without executing downloaded code')
     pair.add_argument('--gateway', required=True)
-    commands.add_parser('agent', help='Run this machine’s paired agent')
+    agent_parser = commands.add_parser('agent', help='Run this machine’s paired agent')
+    agent_parser.add_argument('--backend', choices=('tmux', 'cmux'), help='Terminal backend (default: config or tmux)')
+    agent_parser.add_argument('--cmux-socket', help='Explicit local cmux socket path')
     diagnose = commands.add_parser('doctor', help='Check dependencies, setup, and optional gateway reachability')
     diagnose.add_argument('--gateway')
     args = parser.parse_args(argv)
@@ -187,12 +189,15 @@ def main(argv=None):
             write_agent(directory, credentials, url)
             print('Paired as ' + credentials['name'] + '. Run tmux-bridge agent to connect.')
         elif args.command == 'agent':
-            if not shutil.which('tmux'):
-                raise ValueError('Install tmux first: brew install tmux (macOS), or apt install tmux (Debian/Ubuntu).')
             import server
             if not server.CONFIG_FILE.exists():
                 raise ValueError('Run tmux-bridge pair --gateway URL first.')
-            asyncio.run(server.main())
+            backend = args.backend or server.load_config().get('backend', 'tmux')
+            if backend == 'tmux' and not shutil.which('tmux'):
+                raise ValueError('Install tmux first: brew install tmux (macOS), or apt install tmux (Debian/Ubuntu).')
+            if args.cmux_socket and backend != 'cmux':
+                raise ValueError('--cmux-socket requires the cmux backend')
+            asyncio.run(server.main(backend=backend, cmux_socket=args.cmux_socket))
         return 0
     except (ValueError, OSError, KeyError) as exc:
         print('Error: ' + str(exc), file=sys.stderr)

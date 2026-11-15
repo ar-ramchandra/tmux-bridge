@@ -139,7 +139,10 @@ const html=fs.readFileSync(path.join(__dirname,'../gateway.py'),'utf8').split('H
   // Even an older presence update must not discard keys during the handoff.
   await page.evaluate(()=>handleMessage({data:JSON.stringify({type:'presence',sessions:{direct:{viewers:[{id:clientId,active:false}]}}})}));
   await page.keyboard.type('x');
-  assert.equal(await page.evaluate(()=>window.sent.at(-1)),'x');
+  // A mobile viewport resize can arrive after the key without changing input.
+  await page.evaluate(()=>term.resize(term.cols+1,term.rows));
+  assert.deepEqual(await page.evaluate(()=>window.sent.filter(s=>typeof s==='string'&&!s.includes('"resize"'))),
+    [JSON.stringify({type:'take_input'}),'f','i','r','s','t','x']);
   await page.evaluate(()=>handleMessage({data:JSON.stringify({type:'presence',sessions:{direct:{viewers:[{id:clientId,active:true}]}}})}));
   assert.equal(await page.evaluate(()=>hasInput&&inputClaimSocket===null),true);
   console.log('PASS phone tap claims input before the first keystroke without waiting for presence');
