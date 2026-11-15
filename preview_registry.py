@@ -23,7 +23,7 @@ BLOCKED_PORTS = {2375, 2376, 4601, 4603, 5900, 5901, 9222, 14610}
 def session_identity(name):
     if not isinstance(name, str) or not name or len(name) > 128:
         raise ValueError('Choose an existing tmux session')
-    result = subprocess.run(['tmux', 'display-message', '-p', '-t', '='+name,
+    result = subprocess.run(['tmux', 'display-message', '-p', '-t', '='+name+':',
                              '#{session_name}\t#{session_created}'],
                             capture_output=True, text=True, timeout=3)
     parts = result.stdout.strip().split('\t')

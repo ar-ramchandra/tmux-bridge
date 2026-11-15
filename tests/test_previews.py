@@ -3,6 +3,8 @@ import contextlib
 import json
 from pathlib import Path
 import socket
+import shutil
+import subprocess
 import tempfile
 import time
 import unittest
@@ -58,6 +60,23 @@ class RegistryTests(unittest.TestCase):
                 self.assertEqual(reg.listing(), [])
             for port in (True, 22, 5900, 4601, '3000', 65536):
                 with self.assertRaises(ValueError): reg.create('work', port)
+
+    @unittest.skipUnless(shutil.which('tmux'), 'tmux not installed')
+    def test_actual_tmux_exact_session_resolution(self):
+        from preview_registry import session_identity
+        run = subprocess.run
+        socket_name = 'bridge-preview-test-'+__import__('secrets').token_hex(8)
+        prefix = ['tmux', '-L', socket_name]
+        try:
+            run(prefix+['new-session', '-d', '-s', 'preview-owning-session'], check=True)
+            def isolated(args, **kwargs):
+                return run(prefix+args[1:], **kwargs)
+            with patch('preview_registry.subprocess.run', side_effect=isolated):
+                self.assertGreater(session_identity('preview-owning-session'), 0)
+                with self.assertRaises(ValueError):
+                    session_identity('preview-owning')
+        finally:
+            run(prefix+['kill-server'], capture_output=True)
 
     def test_sensitive_headers_and_cookie_scope(self):
         result = dict(clean_headers([('Cookie','CF_Authorization=secret; app=ok; __cf_bm=secret'),

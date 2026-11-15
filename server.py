@@ -936,7 +936,6 @@ class ServerAgent:
         prev_sessions = None
         while True:
             await asyncio.sleep(SESSION_POLL_INTERVAL)
-            await self.previews.announce(ws)
             await ws.send(json.dumps({'type': 'account_usage', 'snapshot': _account_usage}))
             sessions = self.manager.list_sessions()
             # Only send if changed
@@ -946,6 +945,7 @@ class ServerAgent:
                 except Exception:
                     break
                 prev_sessions = sessions
+            await self.previews.announce(ws)
 
     def stop(self):
         self._running = False

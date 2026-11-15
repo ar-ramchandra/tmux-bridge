@@ -101,6 +101,9 @@ class PreviewGateway:
                 raise ValueError()
         except ValueError:
             return JSONResponse({'error': 'Invalid preview request'}, status_code=400)
+        sessions = await conn.rpc('GET', '/api/sessions')
+        if sessions['status'] == 200 and isinstance(sessions['body'], list):
+            conn.sessions = sessions['body']
         result = await conn.rpc('POST', '/api/previews', body)
         return JSONResponse(result['body'], status_code=result['status'])
 
