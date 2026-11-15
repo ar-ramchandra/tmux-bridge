@@ -113,7 +113,9 @@ Otherwise an older gateway could serve its control UI on a preview hostname.
   chunks. Node WebSocket queues are bounded. Browser disconnection cancels work.
 - Access cookies and Cloudflare identity headers never reach the application.
   App cookies are restricted to the preview hostname. Cross-origin browser
-  requests are rejected; preview hosts cannot reach gateway API/control routes.
+  fetches, mutations, and sockets are rejected; authenticated top-level links
+  can be opened from the private localhost UI or another website.
+  Preview hosts cannot reach gateway API/control routes.
 - Session identity includes its creation timestamp. Disconnect, expiry, Stop,
   or session removal closes relays. A gateway restart fails closed until nodes
   reannounce live registrations. Node-local Stop/session changes can take up to

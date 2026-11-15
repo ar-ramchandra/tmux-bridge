@@ -185,6 +185,10 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
     async def test_origin_separation_unknown_hosts_and_stopped_links(self):
         r=await self.client.get('/api/control-secret');self.assertEqual(r.status_code,404);self.assertNotIn('must not leak',r.text)
         self.assertEqual((await self.client.get('/html',headers={'origin':'https://another-preview.test'})).status_code,403)
+        self.assertEqual((await self.client.get('/html',headers={'sec-fetch-site':'cross-site'})).status_code,403)
+        navigation={'sec-fetch-site':'cross-site','sec-fetch-mode':'navigate','sec-fetch-dest':'document'}
+        self.assertEqual((await self.client.get('/html',headers=navigation)).status_code,200)
+        self.assertEqual((await self.client.post('/echo',headers=navigation)).status_code,403)
         self.assertEqual((await self.client.get('/html',headers={'host':'unknown.test'})).status_code,410)
         self.gw.update('node',[])
         self.assertEqual((await self.client.get('/html')).status_code,410)

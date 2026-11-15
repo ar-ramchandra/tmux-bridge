@@ -287,7 +287,12 @@ class PreviewOriginMiddleware:
             return await self.previews.error(scope, receive, send, 410, 'Preview has stopped or expired')
         origin = headers.get('origin')
         expected = 'https://'+host
-        # Deny browser requests from another app, including same-site siblings.
-        if (origin and origin != expected) or headers.get('sec-fetch-site') == 'cross-site' or (scope['type'] == 'websocket' and origin != expected):
+        # Links may originate at the private localhost gateway or an external
+        # page. Permit top-level document navigation after ingress admission,
+        # while denying cross-origin fetches, mutations, embeds, and sockets.
+        navigation = (scope['type'] == 'http' and scope['method'] in {'GET', 'HEAD'}
+                      and headers.get('sec-fetch-mode') == 'navigate'
+                      and headers.get('sec-fetch-dest') == 'document')
+        if (origin and origin != expected) or (headers.get('sec-fetch-site') == 'cross-site' and not navigation) or (scope['type'] == 'websocket' and origin != expected):
             return await self.previews.error(scope, receive, send, 403, 'Cross-origin request denied')
         return await self.previews.relay(row, scope, receive, send)
